@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+/* ── Design Tokens (dari stitch_sales_routing_engine/logistics_routing_system/DESIGN.md) ── */
+@theme {
+  /* Colors */
+  --color-background:                #f7f9fb;
+  --color-surface:                   #f7f9fb;
+  --color-surface-bright:            #f7f9fb;
+  --color-surface-dim:               #d8dadc;
+  --color-surface-container-lowest:  #ffffff;
+  --color-surface-container-low:     #f2f4f6;
+  --color-surface-container:         #eceef0;
+  --color-surface-container-high:    #e6e8ea;
+  --color-surface-container-highest: #e0e3e5;
+  --color-surface-variant:           #e0e3e5;
+  --color-on-surface:                #191c1e;
+  --color-on-surface-variant:        #45464d;
+  --color-inverse-surface:           #2d3133;
+  --color-inverse-on-surface:        #eff1f3;
+  --color-outline:                   #76777d;
+  --color-outline-variant:           #c6c6cd;
+
+  --color-primary:                   #000000;
+  --color-on-primary:                #ffffff;
+  --color-primary-container:         #131b2e;
+  --color-on-primary-container:      #7c839b;
+  --color-primary-fixed:             #dae2fd;
+  --color-primary-fixed-dim:         #bec6e0;
+  --color-on-primary-fixed:          #131b2e;
+  --color-on-primary-fixed-variant:  #3f465c;
+  --color-inverse-primary:           #bec6e0;
+
+  --color-secondary:                 #505f76;
+  --color-on-secondary:              #ffffff;
+  --color-secondary-container:       #d0e1fb;
+  --color-on-secondary-container:    #54647a;
+  --color-secondary-fixed:           #d3e4fe;
+  --color-secondary-fixed-dim:       #b7c8e1;
+  --color-on-secondary-fixed:        #0b1c30;
+  --color-on-secondary-fixed-variant:#38485d;
+
+  --color-tertiary:                  #000000;
+  --color-on-tertiary:               #ffffff;
+  --color-tertiary-container:        #00201d;
+  --color-on-tertiary-container:     #0c9488;
+  --color-tertiary-fixed:            #89f5e7;
+  --color-tertiary-fixed-dim:        #6bd8cb;
+  --color-on-tertiary-fixed:         #00201d;
+  --color-on-tertiary-fixed-variant: #005049;
+
+  --color-error:                     #ba1a1a;
+  --color-on-error:                  #ffffff;
+  --color-error-container:           #ffdad6;
+  --color-on-error-container:        #93000a;
+
+  /* Border radius */
+  --radius-DEFAULT: 0.125rem;   /* 2px  */
+  --radius-sm:      0.125rem;   /* 2px  */
+  --radius-lg:      0.25rem;    /* 4px  */
+  --radius-xl:      0.5rem;     /* 8px  */
+  --radius-2xl:     0.75rem;    /* 12px */
+  --radius-full:    9999px;
+
+  /* Spacing */
+  --spacing-xs:             4px;
+  --spacing-sm:             8px;
+  --spacing-md:             16px;
+  --spacing-lg:             24px;
+  --spacing-xl:             32px;
+  --spacing-gutter:         16px;
+  --spacing-margin-mobile:  16px;
+  --spacing-margin-desktop: 32px;
+
+  /* Font families */
+  --font-family-sans:       'Inter', sans-serif;
+  --font-family-headline:   'Hanken Grotesk', sans-serif;
+}
+
+/* ── Base ── */
+* { box-sizing: border-box; }
+
+html { height: 100%; }
+body { min-height: 100%; }
+#root { min-height: 100vh; display: flex; flex-direction: column; }
+
+body {
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f7f9fb;
+}
+
+/* ── Material Symbols ── */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  user-select: none;
+}
+.ms-fill {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* ── Typography helpers (match stitch class names exactly) ── */
+.font-headline-lg        { font-family: 'Hanken Grotesk', sans-serif; }
+.font-headline-lg-mobile { font-family: 'Hanken Grotesk', sans-serif; }
+.font-headline-md        { font-family: 'Hanken Grotesk', sans-serif; }
+.font-headline           { font-family: 'Hanken Grotesk', sans-serif; }
+.font-body-lg            { font-family: 'Inter', sans-serif; }
+.font-body-md            { font-family: 'Inter', sans-serif; }
+.font-body-sm            { font-family: 'Inter', sans-serif; }
+.font-label-md           { font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600; line-height: 16px; letter-spacing: 0.05em; }
+.font-data-mono          { font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 500; line-height: 20px; }
+
+.text-headline-lg        { font-size: 30px; line-height: 38px; letter-spacing: -0.02em; font-weight: 700; }
+.text-headline-lg-mobile { font-size: 24px; line-height: 32px; font-weight: 700; }
+.text-headline-md        { font-size: 20px; line-height: 28px; font-weight: 600; }
+.text-body-lg            { font-size: 16px; line-height: 24px; font-weight: 400; }
+.text-body-md            { font-size: 14px; line-height: 20px; font-weight: 400; }
+.text-body-sm            { font-size: 12px; line-height: 18px; font-weight: 400; }
+.text-label-md           { font-size: 12px; line-height: 16px; letter-spacing: 0.05em; font-weight: 600; }
+
+/* shorthand aliases */
+.label-md { font-size: 12px; font-weight: 600; line-height: 16px; letter-spacing: 0.05em; }
+.body-md  { font-size: 14px; font-weight: 400; line-height: 20px; }
+.body-sm  { font-size: 12px; font-weight: 400; line-height: 18px; }

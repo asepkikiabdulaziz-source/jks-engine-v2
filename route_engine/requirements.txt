@@ -1,0 +1,12 @@
+# JKS Route Engine v2 — dependencies
+#
+# core/ (geo, qc, scheduling, biweekly, estimator, summary) + engine.py berjalan
+# TANPA dependency eksternal apa pun (pure stdlib) — sesuai guardrail §2.2/§2.4.
+#
+# OPSIONAL — hanya meningkatkan kualitas DRAFT partisi (core/partition.py).
+# Bila absen, engine tetap jalan via fallback slice_by_bearing (no fail-closed).
+k-means-constrained>=0.7.0   # optional: balanced clustering untuk draft partisi
+numpy>=1.24                  # optional: dibutuhkan oleh k-means-constrained
+
+# dev / test
+pytest>=7.0

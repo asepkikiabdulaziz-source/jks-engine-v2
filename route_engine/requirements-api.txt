@@ -1,0 +1,8 @@
+# FastAPI service dependencies
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.0
+
+# Supabase DB access + auth verification (service role client)
+# auth.get_user(jwt) dipakai untuk verifikasi user token — tidak butuh JWT secret
+supabase>=2.3.0

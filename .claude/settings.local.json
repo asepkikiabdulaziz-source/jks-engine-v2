@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__claude_ai_Supabase__execute_sql",
+      "mcp__claude_ai_Supabase__apply_migration",
+      "Bash(npx tsc *)",
+      "Bash(cd /d D:\\\\PROJECT\\\\jks-v2)",
+      "Bash(python -m pytest route_engine/tests -q)"
+    ]
+  }
+}

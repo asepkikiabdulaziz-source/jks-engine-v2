@@ -1,0 +1,42 @@
+# ── Node / Frontend ──────────────────────────────────────────────────────────
+node_modules/
+dist/
+*.local
+
+# ── Environment files ────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.pytest_cache/
+.python-version
+venv/
+.venv/
+*.egg-info/
+
+# ── Generated / build artifacts ──────────────────────────────────────────────
+*.png
+*.jpg
+*.jpeg
+viz_partition_result.*
+
+# ── Data sensitif / file klien ───────────────────────────────────────────────
+# Template boleh di-commit, data nyata jangan
+SRAGEN*.xlsx
+*TO BE*.xlsx
+referensi/
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
