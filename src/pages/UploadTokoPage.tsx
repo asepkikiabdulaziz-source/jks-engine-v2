@@ -570,8 +570,8 @@ export default function UploadTokoPage() {
 
                   {/* Review tabs: Tidak Masuk GADM + Koordinat Mencurigakan */}
                   <ReviewPanel
-                    notFound={stagingResult.not_found}
-                    anomaliStores={stagingResult.anomali_stores}
+                    notFound={stagingResult.not_found ?? []}
+                    anomaliStores={stagingResult.anomali_stores ?? []}
                     fileName={fileName}
                   />
 
@@ -731,8 +731,10 @@ function ReviewPanel({
   anomaliStores: AnomalStore[]
   fileName     : string
 }) {
-  const hasNotFound = notFound.length > 0
-  const hasAnomali  = anomaliStores.length > 0
+  const safeNotFound    = notFound     ?? []
+  const safeAnomali     = anomaliStores ?? []
+  const hasNotFound = safeNotFound.length > 0
+  const hasAnomali  = safeAnomali.length > 0
 
   // Default ke tab pertama yang punya isu
   const [tab, setTab] = React.useState<'not_found' | 'anomali'>(
@@ -760,7 +762,7 @@ function ReviewPanel({
             Tidak Masuk GADM
             <span className="ml-[3px] px-[5px] py-[1px] rounded-full text-[10px] font-bold"
                   style={{ background: 'rgba(186,26,26,0.15)', color: '#ba1a1a' }}>
-              {notFound.length}
+              {safeNotFound.length}
             </span>
           </button>
         )}
@@ -777,7 +779,7 @@ function ReviewPanel({
             Koordinat Mencurigakan
             <span className="ml-[3px] px-[5px] py-[1px] rounded-full text-[10px] font-bold"
                   style={{ background: 'rgba(186,26,26,0.15)', color: '#ba1a1a' }}>
-              {anomaliStores.length}
+              {safeAnomali.length}
             </span>
           </button>
         )}
@@ -792,7 +794,7 @@ function ReviewPanel({
               Koordinat di luar semua polygon GADM — kolom gadm_* kosong, pasti perlu koreksi
             </p>
             <button
-              onClick={() => downloadNotFound(notFound, fileName)}
+              onClick={() => downloadNotFound(safeNotFound, fileName)}
               className="flex items-center gap-[4px] px-sm py-[3px] rounded text-[11px] font-semibold border transition-colors hover:bg-error/5"
               style={{ borderColor: 'rgba(186,26,26,0.3)', color: '#ba1a1a', background: 'rgba(255,255,255,0.85)' }}
             >
@@ -811,7 +813,7 @@ function ReviewPanel({
                 </tr>
               </thead>
               <tbody>
-                {notFound.map((nf, i) => (
+                {safeNotFound.map((nf, i) => (
                   <tr key={i} className="border-t border-secondary/10">
                     <td className="px-3 py-1 font-data-mono text-data-mono">{nf.customer_code}</td>
                     <td className="px-3 py-1 font-body-sm text-body-sm max-w-[180px] truncate"
@@ -835,7 +837,7 @@ function ReviewPanel({
               Masuk GADM tapi di kecamatan ≤ 2 toko — kemungkinan koordinat meleset ke kecamatan yang salah
             </p>
             <button
-              onClick={() => downloadAnomalStores(anomaliStores, fileName)}
+              onClick={() => downloadAnomalStores(safeAnomali, fileName)}
               className="flex items-center gap-[4px] px-sm py-[3px] rounded text-[11px] font-semibold border transition-colors hover:bg-error/5"
               style={{ borderColor: 'rgba(186,26,26,0.3)', color: '#ba1a1a', background: 'rgba(255,255,255,0.85)' }}
             >
@@ -856,7 +858,7 @@ function ReviewPanel({
                 </tr>
               </thead>
               <tbody>
-                {anomaliStores.map((s, i) => (
+                {safeAnomali.map((s, i) => (
                   <tr key={i} className="border-t border-secondary/10"
                       style={{ background: 'rgba(255,218,214,0.2)' }}>
                     <td className="px-3 py-1 font-data-mono text-data-mono">{s.customer_code}</td>
