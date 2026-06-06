@@ -560,62 +560,12 @@ export default function UploadTokoPage() {
                     </div>
                   )}
 
-                  {/* Kecamatan distribution */}
-                  {stagingResult.summary.length > 0 && (
-                    <StagingKecamatanSummary
-                      summary={stagingResult.summary}
-                      total={stagingResult.geocoded}
-                      fileName={fileName}
-                    />
-                  )}
-
-                  {/* Not found list */}
-                  {stagingResult.not_found.length > 0 && (
-                    <div className="rounded-lg border overflow-hidden"
-                         style={{ borderColor: 'rgba(186,26,26,0.2)' }}>
-                      <div className="flex items-center gap-sm px-md py-sm"
-                           style={{ background: 'rgba(255,218,214,0.2)' }}>
-                        <span className="material-symbols-outlined text-error" style={{ fontSize: 16 }}>location_off</span>
-                        <p className="font-label-md text-label-md text-error flex-1 uppercase tracking-wide">
-                          {stagingResult.not_found.length} Toko Tidak Cocok GADM
-                        </p>
-                        <span className="font-body-sm text-body-sm text-on-surface-variant mr-sm">
-                          gadm_* akan kosong
-                        </span>
-                        <button
-                          onClick={() => downloadNotFound(stagingResult.not_found, fileName)}
-                          className="flex items-center gap-[4px] px-sm py-[3px] rounded-lg text-[11px] font-semibold border transition-colors hover:bg-error/5"
-                          style={{ borderColor: 'rgba(186,26,26,0.3)', color: '#ba1a1a', background: 'rgba(255,255,255,0.8)' }}
-                          title="Download daftar toko yang tidak cocok GADM sebagai Excel"
-                        >
-                          <span className="material-symbols-outlined" style={{ fontSize: 13 }}>download</span>
-                          Download
-                        </button>
-                      </div>
-                      <div className="max-h-48 overflow-y-auto">
-                        <table className="w-full text-xs">
-                          <thead style={{ background: '#f2f4f6', position: 'sticky', top: 0 }}>
-                            <tr>
-                              <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kode</th>
-                              <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Nama</th>
-                              <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Lat</th>
-                              <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Lon</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {stagingResult.not_found.map((nf, i) => (
-                              <tr key={i} className="border-t border-secondary/10">
-                                <td className="px-3 py-1 font-data-mono text-data-mono">{nf.customer_code}</td>
-                                <td className="px-3 py-1 font-body-sm text-body-sm max-w-[160px] truncate" title={nf.customer_name}>{nf.customer_name}</td>
-                                <td className="px-3 py-1 font-data-mono text-data-mono text-on-surface-variant">{nf.lat.toFixed(5)}</td>
-                                <td className="px-3 py-1 font-data-mono text-data-mono text-on-surface-variant">{nf.lon.toFixed(5)}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
+                  {/* Review tabs: Not Found GADM + Kecamatan Mencurigakan */}
+                  <ReviewPanel
+                    notFound={stagingResult.not_found}
+                    summary={stagingResult.summary}
+                    fileName={fileName}
+                  />
 
                   {/* Commit error */}
                   {stageError && (
@@ -766,71 +716,165 @@ function StatCard({ label, value, accent, error }: { label: string; value: numbe
   )
 }
 
-function StagingKecamatanSummary({
-  summary, total, fileName,
+function ReviewPanel({
+  notFound, summary, fileName,
 }: {
-  summary   : KecamatanSummaryRow[]
-  total     : number
-  fileName  : string
+  notFound : StagingResult['not_found']
+  summary  : KecamatanSummaryRow[]
+  fileName : string
 }) {
+  const anomali = summary.filter(r => r.jumlah <= 2)
+  const [tab, setTab] = React.useState<'not_found' | 'anomali'>(
+    notFound.length > 0 ? 'not_found' : 'anomali',
+  )
+
+  if (notFound.length === 0 && anomali.length === 0) return null
+
   return (
-    <div className="rounded-lg border border-secondary/10 overflow-hidden" style={{ background: '#f7f9fb' }}>
-      <div className="flex items-center gap-sm px-md py-sm border-b border-secondary/10" style={{ background: '#f2f4f6' }}>
-        <span className="material-symbols-outlined" style={{ fontSize: 16, color: '#0c9488' }}>my_location</span>
-        <p className="font-label-md text-label-md text-on-surface-variant uppercase tracking-wide flex-1">
-          Distribusi per Kecamatan
-        </p>
-        <span className="font-label-md text-label-md text-on-surface-variant mr-sm">{total} ter-geocode</span>
-        {summary.filter(r => r.jumlah <= 2).length > 0 && (
-          <button
-            onClick={() => downloadKecamatanAnomali(summary, fileName)}
-            className="flex items-center gap-[4px] px-sm py-[3px] rounded-lg text-[11px] font-semibold border transition-colors hover:bg-error/5"
-            style={{ borderColor: 'rgba(186,26,26,0.3)', color: '#ba1a1a', background: 'rgba(255,255,255,0.8)' }}
-            title="Download kecamatan yang perlu dicek (jumlah toko ≤ 2)"
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: 13 }}>download</span>
-            Download Perlu Cek ({summary.filter(r => r.jumlah <= 2).length})
-          </button>
-        )}
+    <div className="rounded-lg border overflow-hidden" style={{ borderColor: 'rgba(80,95,118,0.15)' }}>
+
+      {/* ── Tab headers ── */}
+      <div className="flex" style={{ background: '#f2f4f6', borderBottom: '1px solid rgba(80,95,118,0.1)' }}>
+        {/* Tab 1 */}
+        <button
+          onClick={() => setTab('not_found')}
+          className="flex items-center gap-[5px] px-md py-sm text-xs font-semibold border-b-2 transition-colors"
+          style={{
+            borderColor: tab === 'not_found' ? '#ba1a1a' : 'transparent',
+            color:       tab === 'not_found' ? '#ba1a1a' : '#9099a8',
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 13 }}>location_off</span>
+          Tidak Ditemukan GADM
+          {notFound.length > 0 && (
+            <span className="ml-[3px] px-[5px] py-[1px] rounded-full text-[10px] font-bold"
+                  style={{ background: 'rgba(186,26,26,0.15)', color: '#ba1a1a' }}>
+              {notFound.length}
+            </span>
+          )}
+        </button>
+
+        {/* Tab 2 */}
+        <button
+          onClick={() => setTab('anomali')}
+          className="flex items-center gap-[5px] px-md py-sm text-xs font-semibold border-b-2 transition-colors"
+          style={{
+            borderColor: tab === 'anomali' ? '#ba1a1a' : 'transparent',
+            color:       tab === 'anomali' ? '#ba1a1a' : '#9099a8',
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 13 }}>warning</span>
+          Kecamatan Mencurigakan
+          {anomali.length > 0 && (
+            <span className="ml-[3px] px-[5px] py-[1px] rounded-full text-[10px] font-bold"
+                  style={{ background: 'rgba(186,26,26,0.15)', color: '#ba1a1a' }}>
+              {anomali.length}
+            </span>
+          )}
+        </button>
       </div>
-      <div className="overflow-x-auto max-h-56 overflow-y-auto">
-        <table className="w-full text-xs">
-          <thead style={{ background: '#eceef0', position: 'sticky', top: 0 }}>
-            <tr>
-              <th className="px-3 py-2 text-left font-label-md text-label-md text-on-surface-variant">Provinsi</th>
-              <th className="px-3 py-2 text-left font-label-md text-label-md text-on-surface-variant">Kab/Kota</th>
-              <th className="px-3 py-2 text-left font-label-md text-label-md text-on-surface-variant">Kecamatan</th>
-              <th className="px-3 py-2 text-right font-label-md text-label-md text-on-surface-variant">Toko</th>
-              <th className="px-3 py-2 text-right font-label-md text-label-md text-on-surface-variant">%</th>
-              <th className="px-3 py-2 text-left font-label-md text-label-md text-on-surface-variant">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {summary.map((row, i) => {
-              const isAnomali = row.jumlah <= 2
-              return (
-                <tr key={i} className="border-t border-secondary/10"
-                    style={{ background: isAnomali ? 'rgba(255,218,214,0.3)' : 'transparent' }}>
-                  <td className="px-3 py-1.5 font-body-sm text-body-sm text-on-surface-variant">{row.name_1}</td>
-                  <td className="px-3 py-1.5 font-body-sm text-body-sm">{row.name_2}</td>
-                  <td className="px-3 py-1.5 font-body-sm text-body-sm font-semibold">{row.name_3}</td>
-                  <td className="px-3 py-1.5 font-data-mono text-data-mono text-right">{row.jumlah}</td>
-                  <td className="px-3 py-1.5 font-data-mono text-data-mono text-right text-on-surface-variant">{row.pct}%</td>
-                  <td className="px-3 py-1.5">
-                    {isAnomali ? (
-                      <span className="text-[10px] font-bold px-1 py-0.5 rounded text-error"
-                            style={{ background: 'rgba(186,26,26,0.1)' }}>PERLU CEK</span>
-                    ) : (
-                      <span className="text-[10px] font-bold px-1 py-0.5 rounded"
-                            style={{ background: 'rgba(12,148,136,0.12)', color: '#0c9488' }}>OK</span>
-                    )}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
+
+      {/* ── Tab 1: Tidak Ditemukan GADM ── */}
+      {tab === 'not_found' && (
+        notFound.length === 0 ? (
+          <div className="flex items-center justify-center gap-sm py-lg">
+            <span className="material-symbols-outlined ms-fill" style={{ color: '#0c9488', fontSize: 20 }}>check_circle</span>
+            <span className="text-sm text-on-surface-variant">Semua toko berhasil di-geocode ke wilayah GADM</span>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-sm px-md py-xs"
+                 style={{ background: 'rgba(255,218,214,0.12)', borderBottom: '1px solid rgba(186,26,26,0.08)' }}>
+              <p className="text-[11px] text-on-surface-variant flex-1">
+                Kolom gadm_* akan kosong — periksa & koreksi koordinat toko ini
+              </p>
+              <button
+                onClick={() => downloadNotFound(notFound, fileName)}
+                className="flex items-center gap-[4px] px-sm py-[3px] rounded text-[11px] font-semibold border transition-colors hover:bg-error/5"
+                style={{ borderColor: 'rgba(186,26,26,0.3)', color: '#ba1a1a', background: 'rgba(255,255,255,0.85)' }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 13 }}>download</span>
+                Download
+              </button>
+            </div>
+            <div className="max-h-48 overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead style={{ background: '#f7f9fb', position: 'sticky', top: 0 }}>
+                  <tr>
+                    <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kode</th>
+                    <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Nama</th>
+                    <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Lat</th>
+                    <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Lon</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {notFound.map((nf, i) => (
+                    <tr key={i} className="border-t border-secondary/10">
+                      <td className="px-3 py-1 font-data-mono text-data-mono">{nf.customer_code}</td>
+                      <td className="px-3 py-1 font-body-sm text-body-sm max-w-[180px] truncate"
+                          title={nf.customer_name}>{nf.customer_name}</td>
+                      <td className="px-3 py-1 font-data-mono text-data-mono text-on-surface-variant">{nf.lat.toFixed(5)}</td>
+                      <td className="px-3 py-1 font-data-mono text-data-mono text-on-surface-variant">{nf.lon.toFixed(5)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )
+      )}
+
+      {/* ── Tab 2: Kecamatan Mencurigakan ── */}
+      {tab === 'anomali' && (
+        anomali.length === 0 ? (
+          <div className="flex items-center justify-center gap-sm py-lg">
+            <span className="material-symbols-outlined ms-fill" style={{ color: '#0c9488', fontSize: 20 }}>check_circle</span>
+            <span className="text-sm text-on-surface-variant">Distribusi kecamatan terlihat normal</span>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-sm px-md py-xs"
+                 style={{ background: 'rgba(255,218,214,0.12)', borderBottom: '1px solid rgba(186,26,26,0.08)' }}>
+              <p className="text-[11px] text-on-surface-variant flex-1">
+                Kecamatan dengan ≤ 2 toko — kemungkinan koordinat salah kecamatan
+              </p>
+              <button
+                onClick={() => downloadKecamatanAnomali(summary, fileName)}
+                className="flex items-center gap-[4px] px-sm py-[3px] rounded text-[11px] font-semibold border transition-colors hover:bg-error/5"
+                style={{ borderColor: 'rgba(186,26,26,0.3)', color: '#ba1a1a', background: 'rgba(255,255,255,0.85)' }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 13 }}>download</span>
+                Download
+              </button>
+            </div>
+            <div className="max-h-48 overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead style={{ background: '#f7f9fb', position: 'sticky', top: 0 }}>
+                  <tr>
+                    <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Provinsi</th>
+                    <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kab/Kota</th>
+                    <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kecamatan</th>
+                    <th className="px-3 py-1.5 text-right font-label-md text-label-md text-on-surface-variant">Toko</th>
+                    <th className="px-3 py-1.5 text-right font-label-md text-label-md text-on-surface-variant">%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {anomali.map((row, i) => (
+                    <tr key={i} className="border-t border-secondary/10"
+                        style={{ background: 'rgba(255,218,214,0.25)' }}>
+                      <td className="px-3 py-1.5 font-body-sm text-body-sm text-on-surface-variant">{row.name_1}</td>
+                      <td className="px-3 py-1.5 font-body-sm text-body-sm">{row.name_2}</td>
+                      <td className="px-3 py-1.5 font-body-sm text-body-sm font-semibold">{row.name_3}</td>
+                      <td className="px-3 py-1.5 font-data-mono text-data-mono text-right font-bold" style={{ color: '#ba1a1a' }}>{row.jumlah}</td>
+                      <td className="px-3 py-1.5 font-data-mono text-data-mono text-right text-on-surface-variant">{row.pct}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )
+      )}
     </div>
   )
 }
