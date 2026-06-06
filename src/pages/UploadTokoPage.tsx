@@ -578,6 +578,7 @@ export default function UploadTokoPage() {
                       summary={stagingResult.summary}
                       geocoded={stagingResult.geocoded}
                       fileName={fileName}
+                      anomaliStores={stagingResult.anomali_stores ?? []}
                     />
                   )}
 
@@ -722,127 +723,227 @@ export default function UploadTokoPage() {
 
 // --- Sub-components ---
 
-function downloadKecamatanMencurigakan(
-  suspicious: KecamatanSummaryRow[],
-  sourceFileName: string,
-) {
-  if (suspicious.length === 0) return
-  const headers = ['Provinsi', 'Kab/Kota', 'Kecamatan', 'Jumlah Toko', '%', 'Catatan']
-  const rows = suspicious.map(r => [
-    r.name_1, r.name_2, r.name_3, r.jumlah, r.pct,
-    'Kecamatan dengan terlalu sedikit toko — kemungkinan koordinat meleset ke kecamatan yang salah',
-  ])
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
-  ws['!cols'] = [{ wch: 22 }, { wch: 24 }, { wch: 24 }, { wch: 14 }, { wch: 8 }, { wch: 60 }]
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Kecamatan Mencurigakan')
-  const base = sourceFileName.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_')
-  XLSX.writeFile(wb, `${base}_kecamatan_mencurigakan.xlsx`)
-}
-
 function GeocodeSummary({
-  summary, geocoded, fileName,
+  summary, geocoded, fileName, anomaliStores,
 }: {
-  summary  : KecamatanSummaryRow[]
-  geocoded : number
-  fileName : string
+  summary      : KecamatanSummaryRow[]
+  geocoded     : number
+  fileName     : string
+  anomaliStores: AnomalStore[]
 }) {
-  const suspicious  = summary.filter(r => r.jumlah <= 2)   // kecamatan mencurigakan — selalu tampil semua
-  const normal      = summary.filter(r => r.jumlah > 2)
-  const SHOW_NORMAL = 6
-  const shownNormal  = normal.slice(0, SHOW_NORMAL)
-  const hiddenNormal = normal.length - SHOW_NORMAL
-  const uniqueKota   = [...new Set(summary.map(r => r.name_2).filter(Boolean))].length
+  const [selectedKec, setSelectedKec] = React.useState<KecamatanSummaryRow | null>(null)
+
+  const suspicious  = summary.filter(r => r.jumlah <= 2)
+  const uniqueKota  = [...new Set(summary.map(r => r.name_2).filter(Boolean))].length
+
+  // Toko di kecamatan yang dipilih — dari anomali_stores RPC
+  const modalStores = selectedKec
+    ? anomaliStores.filter(s =>
+        s.kecamatan === selectedKec.name_3 &&
+        s.kota      === selectedKec.name_2,
+      )
+    : []
+
+  function downloadModalStores() {
+    if (!selectedKec) return
+    const headers = ['customer_code', 'customer_name', 'kecamatan_gadm', 'kota_gadm', 'latitude', 'longitude', 'catatan']
+    const rows = modalStores.map(s => [
+      s.customer_code, s.customer_name, s.kecamatan, s.kota, s.lat, s.lon,
+      'Ter-geocode ke kecamatan dengan terlalu sedikit toko — periksa & koreksi lat/lon',
+    ])
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+    ws['!cols'] = [{ wch: 16 }, { wch: 36 }, { wch: 24 }, { wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 56 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Koordinat Mencurigakan')
+    const base     = fileName.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_')
+    const kecName  = (selectedKec.name_3 || 'kecamatan').replace(/[\\/:*?"<>|]/g, '_')
+    XLSX.writeFile(wb, `${base}_${kecName}.xlsx`)
+  }
+
+  const SHOW = 10
+  const shown  = summary.slice(0, SHOW)
+  const hidden = summary.length - SHOW
 
   return (
-    <div className="rounded-lg border overflow-hidden" style={{ borderColor: 'rgba(80,95,118,0.15)' }}>
+    <>
+      <div className="rounded-lg border overflow-hidden" style={{ borderColor: 'rgba(80,95,118,0.15)' }}>
 
-      {/* ── Header ── */}
-      <div className="flex items-center gap-sm px-md py-sm"
-           style={{ background: '#f2f4f6', borderBottom: '1px solid rgba(80,95,118,0.1)' }}>
-        <span className="material-symbols-outlined" style={{ fontSize: 14, color: '#0c9488' }}>map</span>
-        <p className="text-xs font-semibold text-on-surface-variant flex-1">Distribusi Geocoding</p>
-        {suspicious.length > 0 && (
-          <>
-            <span className="flex items-center gap-[3px] px-[6px] py-[2px] rounded-full text-[10px] font-bold mr-sm"
+        {/* ── Header ── */}
+        <div className="flex items-center gap-sm px-md py-sm"
+             style={{ background: '#f2f4f6', borderBottom: '1px solid rgba(80,95,118,0.1)' }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 14, color: '#0c9488' }}>map</span>
+          <p className="text-xs font-semibold text-on-surface-variant flex-1">Distribusi Geocoding</p>
+          {suspicious.length > 0 && (
+            <span className="flex items-center gap-[3px] px-[6px] py-[2px] rounded-full text-[10px] font-bold"
                   style={{ background: 'rgba(186,26,26,0.12)', color: '#ba1a1a' }}>
               <span className="material-symbols-outlined" style={{ fontSize: 11 }}>warning</span>
               {suspicious.length} kecamatan mencurigakan
             </span>
-            <button
-              onClick={() => downloadKecamatanMencurigakan(suspicious, fileName)}
-              className="flex items-center gap-[4px] px-sm py-[3px] rounded text-[11px] font-semibold border transition-colors hover:bg-error/5 mr-sm"
-              style={{ borderColor: 'rgba(186,26,26,0.3)', color: '#ba1a1a', background: 'rgba(255,255,255,0.85)' }}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: 13 }}>download</span>
-              Download
-            </button>
-          </>
-        )}
-        <span className="text-[11px] text-on-surface-variant">
-          {geocoded} toko · {summary.length} kecamatan · {uniqueKota} kab/kota
-        </span>
+          )}
+          <span className="text-[11px] text-on-surface-variant ml-sm">
+            {geocoded} toko · {summary.length} kecamatan · {uniqueKota} kab/kota
+          </span>
+        </div>
+
+        {/* ── Tabel ── */}
+        <div className="max-h-56 overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead style={{ background: '#f7f9fb', position: 'sticky', top: 0, zIndex: 1 }}>
+              <tr>
+                <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant w-8">#</th>
+                <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kecamatan</th>
+                <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kab / Kota</th>
+                <th className="px-3 py-1.5 text-right font-label-md text-label-md text-on-surface-variant">Toko</th>
+                <th className="px-3 py-1.5 text-right font-label-md text-label-md text-on-surface-variant">%</th>
+                <th className="w-[60px]" />
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((r, i) => {
+                const isSusp = r.jumlah <= 2
+                return (
+                  <tr key={i}
+                      className={`border-t transition-colors ${isSusp ? '' : 'hover:bg-surface-container-low'}`}
+                      style={{
+                        borderColor: isSusp ? 'rgba(186,26,26,0.15)' : undefined,
+                        background : isSusp ? 'rgba(255,218,214,0.2)' : undefined,
+                      }}>
+                    <td className="px-3 py-1 font-data-mono text-data-mono"
+                        style={{ color: isSusp ? '#ba1a1a' : undefined }}>
+                      {isSusp
+                        ? <span className="material-symbols-outlined" style={{ fontSize: 12, verticalAlign: 'middle' }}>warning</span>
+                        : i + 1
+                      }
+                    </td>
+                    <td className="px-3 py-1 font-body-sm text-body-sm"
+                        style={{ color: isSusp ? '#ba1a1a' : undefined,
+                                 fontWeight: isSusp ? 600 : undefined }}>
+                      {r.name_3 || '—'}
+                    </td>
+                    <td className="px-3 py-1 font-body-sm text-body-sm"
+                        style={{ color: isSusp ? '#ba1a1a' : '#6b7280' }}>
+                      {r.name_2 || '—'}
+                    </td>
+                    <td className="px-3 py-1 text-right font-data-mono text-data-mono"
+                        style={{ color: isSusp ? '#ba1a1a' : undefined,
+                                 fontWeight: isSusp ? 700 : undefined }}>
+                      {r.jumlah}
+                    </td>
+                    <td className="px-3 py-1 text-right font-data-mono text-data-mono text-on-surface-variant">
+                      {r.pct}%
+                    </td>
+                    <td className="px-2 py-1 text-right">
+                      {isSusp && (
+                        <button
+                          onClick={() => setSelectedKec(r)}
+                          className="px-sm py-[2px] rounded text-[10px] font-semibold border transition-colors hover:bg-error/10"
+                          style={{ borderColor: 'rgba(186,26,26,0.3)', color: '#ba1a1a' }}
+                        >
+                          Detail
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+              {hidden > 0 && (
+                <tr className="border-t border-secondary/10">
+                  <td colSpan={6} className="px-3 py-1.5 text-center text-[11px] text-on-surface-variant italic">
+                    ... dan {hidden} kecamatan lainnya
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      {/* ── Tabel ── */}
-      <div className="max-h-56 overflow-y-auto">
-        <table className="w-full text-xs">
-          <thead style={{ background: '#f7f9fb', position: 'sticky', top: 0, zIndex: 1 }}>
-            <tr>
-              <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant w-8">#</th>
-              <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kecamatan</th>
-              <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kab / Kota</th>
-              <th className="px-3 py-1.5 text-right font-label-md text-label-md text-on-surface-variant">Toko</th>
-              <th className="px-3 py-1.5 text-right font-label-md text-label-md text-on-surface-variant">%</th>
-            </tr>
-          </thead>
-          <tbody>
-            {/* Suspicious rows — selalu tampil, di atas */}
-            {suspicious.map((r, i) => (
-              <tr key={`s${i}`} className="border-t"
-                  style={{ borderColor: 'rgba(186,26,26,0.15)', background: 'rgba(255,218,214,0.25)' }}>
-                <td className="px-3 py-1 font-data-mono text-data-mono" style={{ color: '#ba1a1a' }}>
-                  <span className="material-symbols-outlined" style={{ fontSize: 11, verticalAlign: 'middle' }}>warning</span>
-                </td>
-                <td className="px-3 py-1 font-body-sm text-body-sm font-semibold" style={{ color: '#ba1a1a' }}>
-                  {r.name_3 || '—'}
-                </td>
-                <td className="px-3 py-1 font-body-sm text-body-sm" style={{ color: '#ba1a1a' }}>{r.name_2 || '—'}</td>
-                <td className="px-3 py-1 text-right font-data-mono text-data-mono font-bold" style={{ color: '#ba1a1a' }}>{r.jumlah}</td>
-                <td className="px-3 py-1 text-right font-data-mono text-data-mono" style={{ color: '#ba1a1a' }}>{r.pct}%</td>
-              </tr>
-            ))}
+      {/* ── Modal Detail Kecamatan ── */}
+      {selectedKec && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-lg"
+             style={{ background: 'rgba(0,0,0,0.45)' }}
+             onClick={(e) => { if (e.target === e.currentTarget) setSelectedKec(null) }}>
+          <div className="bg-surface-container-lowest rounded-xl shadow-2xl w-full max-w-xl flex flex-col"
+               style={{ maxHeight: '80vh' }}>
 
-            {/* Divider jika ada keduanya */}
-            {suspicious.length > 0 && shownNormal.length > 0 && (
-              <tr style={{ background: '#f2f4f6' }}>
-                <td colSpan={5} className="px-3 py-[3px] text-[10px] text-on-surface-variant uppercase tracking-wide">
-                  Kecamatan normal
-                </td>
-              </tr>
-            )}
+            {/* Modal header */}
+            <div className="flex items-start gap-md p-lg border-b border-secondary/10 shrink-0">
+              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+                   style={{ background: 'rgba(186,26,26,0.1)' }}>
+                <span className="material-symbols-outlined" style={{ color: '#ba1a1a', fontSize: 20 }}>warning</span>
+              </div>
+              <div className="flex-1">
+                <p className="font-headline-md text-headline-md text-primary">
+                  {selectedKec.name_3 || 'Kecamatan tidak diketahui'}
+                </p>
+                <p className="font-body-sm text-body-sm text-on-surface-variant">
+                  {selectedKec.name_2} · {selectedKec.jumlah} toko — kemungkinan koordinat meleset ke kecamatan yang salah
+                </p>
+              </div>
+              <button onClick={() => setSelectedKec(null)}
+                      className="p-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors">
+                <span className="material-symbols-outlined" style={{ fontSize: 20 }}>close</span>
+              </button>
+            </div>
 
-            {/* Normal rows */}
-            {shownNormal.map((r, i) => (
-              <tr key={`n${i}`} className="border-t border-secondary/10 hover:bg-surface-container-low transition-colors">
-                <td className="px-3 py-1 text-on-surface-variant font-data-mono text-data-mono">{i + 1}</td>
-                <td className="px-3 py-1 font-body-sm text-body-sm text-primary">{r.name_3 || '—'}</td>
-                <td className="px-3 py-1 font-body-sm text-body-sm text-on-surface-variant">{r.name_2 || '—'}</td>
-                <td className="px-3 py-1 text-right font-data-mono text-data-mono">{r.jumlah}</td>
-                <td className="px-3 py-1 text-right font-data-mono text-data-mono text-on-surface-variant">{r.pct}%</td>
-              </tr>
-            ))}
-            {hiddenNormal > 0 && (
-              <tr className="border-t border-secondary/10">
-                <td colSpan={5} className="px-3 py-1.5 text-center text-[11px] text-on-surface-variant italic">
-                  ... dan {hiddenNormal} kecamatan lainnya
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
+            {/* Tabel toko */}
+            <div className="flex-1 overflow-y-auto">
+              {modalStores.length > 0 ? (
+                <table className="w-full text-xs">
+                  <thead style={{ background: '#f7f9fb', position: 'sticky', top: 0 }}>
+                    <tr>
+                      <th className="px-3 py-2 text-left font-label-md text-label-md text-on-surface-variant">Kode</th>
+                      <th className="px-3 py-2 text-left font-label-md text-label-md text-on-surface-variant">Nama Toko</th>
+                      <th className="px-3 py-2 text-right font-label-md text-label-md text-on-surface-variant">Lat</th>
+                      <th className="px-3 py-2 text-right font-label-md text-label-md text-on-surface-variant">Lon</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {modalStores.map((s, i) => (
+                      <tr key={i} className="border-t border-secondary/10 hover:bg-surface-container-low transition-colors">
+                        <td className="px-3 py-2 font-data-mono text-data-mono">{s.customer_code}</td>
+                        <td className="px-3 py-2 font-body-sm text-body-sm">{s.customer_name}</td>
+                        <td className="px-3 py-2 text-right font-data-mono text-data-mono text-on-surface-variant">{s.lat.toFixed(5)}</td>
+                        <td className="px-3 py-2 text-right font-data-mono text-data-mono text-on-surface-variant">{s.lon.toFixed(5)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="px-lg py-xl text-center">
+                  <p className="font-body-sm text-body-sm text-on-surface-variant">
+                    Data store-level tidak tersedia untuk kecamatan ini.
+                  </p>
+                  <p className="font-body-sm text-body-sm text-on-surface-variant mt-xs">
+                    Upload ulang file untuk mendapatkan detail toko.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Modal footer */}
+            <div className="flex items-center justify-end gap-sm p-lg border-t border-secondary/10 shrink-0">
+              <button
+                onClick={() => setSelectedKec(null)}
+                className="px-lg py-sm rounded-lg border border-secondary/20 font-label-md text-label-md text-on-surface-variant hover:bg-surface-container transition-colors"
+              >
+                Tutup
+              </button>
+              {modalStores.length > 0 && (
+                <button
+                  onClick={downloadModalStores}
+                  className="flex items-center gap-sm px-lg py-sm rounded-lg font-label-md text-label-md text-on-primary transition-colors"
+                  style={{ background: '#ba1a1a' }}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 16 }}>download</span>
+                  Download Excel
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 
