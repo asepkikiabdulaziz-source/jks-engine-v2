@@ -1614,7 +1614,7 @@ export default function RoutingEnginePage() {
       const {data:{session},error:se}=await supabase.auth.getSession()
       if(se||!session) throw new Error('Sesi expired')
       // engine same-origin bila VITE_ENGINE_URL kosong (deploy 1-container); set saat dev
-      const eu=((import.meta.env.VITE_ENGINE_URL as string|undefined)??'').replace(/\/$/,'')
+      const eu=((window.__ENV__?.ENGINE_URL ?? import.meta.env.VITE_ENGINE_URL ?? '') as string).replace(/\/$/,'')
       const resp=await fetch(`${eu}/stage1`,{method:'POST',
         headers:{'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`},
         body:JSON.stringify({area_id:activeArea.id,kd_dist:activeArea.kd_dist,depo_lat:Number(activeArea.lat),depo_lon:Number(activeArea.lon),
@@ -1644,7 +1644,7 @@ export default function RoutingEnginePage() {
       const {data:{session},error:se}=await supabase.auth.getSession()
       if(se||!session) throw new Error('Sesi expired')
       // engine same-origin bila VITE_ENGINE_URL kosong (deploy 1-container); set saat dev
-      const eu=((import.meta.env.VITE_ENGINE_URL as string|undefined)??'').replace(/\/$/,'')
+      const eu=((window.__ENV__?.ENGINE_URL ?? import.meta.env.VITE_ENGINE_URL ?? '') as string).replace(/\/$/,'')
       const div=divisions.find(d=>d.id===divId)
       if(!div) throw new Error('Divisi tidak ditemukan')
       // Kirim territories yang mungkin sudah diedit user (Tahap 2)
@@ -1682,7 +1682,7 @@ export default function RoutingEnginePage() {
       const {data:{session},error:se}=await supabase.auth.getSession()
       if(se||!session) throw new Error('Sesi expired')
       // engine same-origin bila VITE_ENGINE_URL kosong (deploy 1-container); set saat dev
-      const eu=((import.meta.env.VITE_ENGINE_URL as string|undefined)??'').replace(/\/$/,'')
+      const eu=((window.__ENV__?.ENGINE_URL ?? import.meta.env.VITE_ENGINE_URL ?? '') as string).replace(/\/$/,'')
       const resp=await fetch(`${eu}/generate-plan`,{method:'POST',
         headers:{'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`},
         body:JSON.stringify({area_id:activeArea.id,kd_dist:activeArea.kd_dist,depo_lat:Number(activeArea.lat),depo_lon:Number(activeArea.lon),dry_run:false,

@@ -16,7 +16,11 @@
 #   SUPABASE_URL          — https://<ref>.supabase.co
 #   SUPABASE_SERVICE_KEY  — service role key (Settings > API > service_role)
 #
+# Env vars (wajib bila menyajikan frontend 1-container → disuntik ke window.__ENV__):
+#   SUPABASE_ANON_KEY     — anon/public key (dikirim ke browser)
+#
 # Env vars (opsional):
+#   ENGINE_URL            — base URL engine utk frontend; kosong → same-origin
 #   ALLOWED_ORIGINS       — comma-separated CORS origins
 #                           default: http://localhost:3000,http://localhost:5173
 # ==============================================================================
@@ -765,10 +769,16 @@ def health() -> dict:
     return {"status": "ok", "version": "2.0.0"}
 
 
-# ── Static frontend (SPA) — deploy 1-container ────────────────────────────────
+# ── Static frontend (SPA) + runtime config — deploy "git saja" ────────────────
 # api.py = transport layer (bukan logic engine), jadi aman menyajikan file statis.
 # Bila folder dist/ ADA (hasil `vite build`, di-COPY ke image oleh Dockerfile root),
 # FastAPI menyajikannya pada origin yang sama → tanpa CORS, tanpa mixed-content.
+#
+# RUNTIME CONFIG: nilai Supabase di-suntik ke index.html SAAT DISAJIKAN (bukan
+# di-inline saat build) sebagai window.__ENV__. Maka image sama bisa deploy ke
+# host mana pun cukup dengan env var runtime — TANPA build-arg. Inilah yang
+# membuat Cloud Run "deploy dari git" jalan tanpa cloudbuild.yaml.
+#
 # Bila dist/ TIDAK ada (mode dev / image engine-only), blok ini di-skip → API-only.
 # PENTING: didaftarkan PALING AKHIR agar route API (+ /docs, /openapi.json) menang.
 _DIST_DIR = os.path.normpath(
@@ -776,7 +786,9 @@ _DIST_DIR = os.path.normpath(
 )
 
 if os.path.isdir(_DIST_DIR):
-    from fastapi.responses import FileResponse
+    import json
+
+    from fastapi.responses import FileResponse, HTMLResponse
     from fastapi.staticfiles import StaticFiles
 
     _assets_dir = os.path.join(_DIST_DIR, "assets")
@@ -785,16 +797,30 @@ if os.path.isdir(_DIST_DIR):
 
     _index_html = os.path.join(_DIST_DIR, "index.html")
 
+    def _render_index() -> "HTMLResponse":
+        # index.html + window.__ENV__ (config runtime dibaca frontend saat boot).
+        with open(_index_html, encoding="utf-8") as fh:
+            html = fh.read()
+        cfg = {
+            "SUPABASE_URL": os.getenv("SUPABASE_URL", ""),
+            "SUPABASE_ANON_KEY": os.getenv("SUPABASE_ANON_KEY", ""),
+            "ENGINE_URL": os.getenv("ENGINE_URL", ""),  # kosong → engine same-origin
+        }
+        # .replace("<", …) mencegah breakout </script> bila ada nilai mengandung '<'.
+        payload = json.dumps(cfg).replace("<", "\\u003c")
+        html = html.replace("</head>", "<script>window.__ENV__=" + payload + "</script></head>", 1)
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
     @app.get("/{full_path:path}", include_in_schema=False)
-    async def spa_fallback(full_path: str) -> "FileResponse":
+    async def spa_fallback(full_path: str):
         # File statis nyata (favicon.ico, vite.svg, dst.) → sajikan apa adanya.
         candidate = os.path.normpath(os.path.join(_DIST_DIR, full_path))
         in_dist = candidate == _DIST_DIR or candidate.startswith(_DIST_DIR + os.sep)
-        if in_dist and os.path.isfile(candidate):
+        if in_dist and full_path not in ("", "index.html") and os.path.isfile(candidate):
             return FileResponse(candidate)
-        # Route SPA (mis. /routing, /plans/..) → index.html; biar router FE yang urus.
-        return FileResponse(_index_html)
+        # Route SPA (mis. /routing) atau index → suntik runtime config lalu sajikan.
+        return _render_index()
 
-    logger.info("Frontend statis dilayani dari %s (deploy 1-container)", _DIST_DIR)
+    logger.info("Frontend statis + runtime config dilayani dari %s", _DIST_DIR)
 else:
     logger.info("dist/ tidak ditemukan — mode API-only (frontend dilayani terpisah)")

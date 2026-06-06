@@ -2,19 +2,19 @@
 # ==============================================================================
 # Dockerfile (ROOT) — bundle 1-container: frontend Vite + engine FastAPI.
 #
-# FastAPI (api.py) menyajikan hasil build Vite dari ./dist pada origin yang SAMA,
-# sehingga TIDAK perlu CORS dan TIDAK ada mixed-content. Satu URL untuk semuanya.
+# FastAPI (api.py) menyajikan hasil build Vite dari ./dist pada origin yang SAMA
+# (tanpa CORS, tanpa mixed-content) DAN menyuntik config Supabase saat runtime
+# sebagai window.__ENV__. Konsekuensinya: build TIDAK butuh secret/build-arg →
+# image sama bisa deploy ke host mana pun hanya dengan env var runtime, dan
+# Cloud Run bisa "deploy dari git" tanpa cloudbuild.yaml.
 #
-# Build (context = ROOT; VITE_* di-inline ke bundle saat build — BUKAN rahasia,
-# anon key memang dikirim ke setiap browser):
-#   docker build \
-#     --build-arg VITE_SUPABASE_URL="https://<ref>.supabase.co" \
-#     --build-arg VITE_SUPABASE_ANON_KEY="<anon-key>" \
-#     -t jks-app .
+# Build (context = ROOT — tanpa arg apa pun):
+#   docker build -t jks-app .
 #
-# Run (SERVICE key RAHASIA → hanya runtime -e, tak masuk layer image):
+# Run (semua config via env runtime; SERVICE key RAHASIA, tak masuk layer image):
 #   docker run -p 8000:8000 \
 #     -e SUPABASE_URL="https://<ref>.supabase.co" \
+#     -e SUPABASE_ANON_KEY="<anon-key>" \
 #     -e SUPABASE_SERVICE_KEY="<service-role-key>" \
 #     jks-app
 #   → buka http://localhost:8000
@@ -33,14 +33,9 @@ RUN npm ci
 # Source + config build (node_modules/referensi/.env disaring oleh .dockerignore).
 COPY . .
 
-# Vite meng-inline VITE_* saat build → WAJIB tersedia sebagai env DI SINI.
-# VITE_ENGINE_URL dikosongkan → frontend memanggil engine same-origin (1-container).
-ARG VITE_SUPABASE_URL
-ARG VITE_SUPABASE_ANON_KEY
-ARG VITE_ENGINE_URL=
-ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
-    VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY \
-    VITE_ENGINE_URL=$VITE_ENGINE_URL
+# Runtime config: Supabase URL/anon key TIDAK di-inline saat build — disuntik
+# FastAPI saat runtime sbg window.__ENV__. Build TANPA secret/arg → image sama
+# jalan di host mana pun, dan Cloud Run bisa "deploy dari git" tanpa flag.
 RUN npm run build      # → /fe/dist
 
 # ── Stage 2: runtime (Python) ─────────────────────────────────────────────────
@@ -70,7 +65,7 @@ EXPOSE 8000
 
 # Worker stateless (RouteEngine tak simpan state) → aman multi-worker.
 # Jalankan api:app (root api.py), bukan route_engine.api:app.
-# PORT di-inject host (Render/Railway) → bind $PORT; fallback 8000 (lokal/Fly).
-# WEB_CONCURRENCY: jumlah worker. Free tier 512MB → set 1 (numpy/sklearn berat).
+# PORT di-inject host (Render/Railway/Cloud Run) → bind $PORT; fallback 8000 (lokal).
+# WEB_CONCURRENCY: jumlah worker. RAM kecil (512MB) → set 1 (numpy/sklearn berat).
 # 'exec' agar uvicorn jadi PID 1 → terima SIGTERM untuk graceful shutdown.
 CMD ["sh", "-c", "exec uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-2}"]
