@@ -42,6 +42,7 @@ from route_engine.constants import day_name
 from route_engine.core.biweekly import split_ganjil_genap
 from route_engine.core.estimator import nn_tour
 from route_engine.core.geo import centroid
+from route_engine.core.partition import balanced_partition
 from route_engine.core.scheduling import slice_by_bearing
 
 logger = logging.getLogger(__name__)
@@ -73,13 +74,29 @@ def _supabase_url()     -> str: return os.getenv("SUPABASE_URL",         "")
 def _supabase_svc_key() -> str: return os.getenv("SUPABASE_SERVICE_KEY", "")
 
 
+# Singleton client — dibuat sekali, dikembalikan di setiap request
+_db_client: Optional[Client] = None
+
 def _db() -> Client:
-    """Service-role Supabase client — bypass RLS, bisa akses jks_engine schema."""
-    url = _supabase_url()
-    key = _supabase_svc_key()
-    if not url or not key:
-        raise HTTPException(500, "SUPABASE_URL / SUPABASE_SERVICE_KEY not configured")
-    return create_client(url, key)
+    """
+    Service-role Supabase client — bypass RLS, bisa akses jks_engine schema.
+    Singleton: create_client() hanya dipanggil sekali per proses worker.
+    """
+    global _db_client
+    if _db_client is None:
+        url = _supabase_url()
+        key = _supabase_svc_key()
+        if not url or not key:
+            raise HTTPException(500, "SUPABASE_URL / SUPABASE_SERVICE_KEY not configured")
+        _db_client = create_client(url, key)
+    return _db_client
+
+
+def _store_visit_freq(raw_val) -> VisitFrequency:
+    """Map DB visit_frequency value → enum. Default BIWEEKLY."""
+    if raw_val and str(raw_val).upper() == "WEEKLY":
+        return VisitFrequency.WEEKLY
+    return VisitFrequency.BIWEEKLY
 
 
 def _verify_jwt(authorization: str = Header(default="")) -> str:
@@ -101,6 +118,36 @@ def _verify_jwt(authorization: str = Header(default="")) -> str:
         raise
     except Exception as exc:
         raise HTTPException(401, f"Unauthorized: {exc}")
+
+
+# ── Helper: agg dict → schedule output ────────────────────────────────────────
+
+def _agg_to_schedule_out(
+    agg: Dict[str, Dict[int, dict]]
+) -> "List[SalesScheduleOut]":
+    """
+    Konversi dict agregasi { sales_name → { day_key → {...} } } ke
+    list SalesScheduleOut terurut (sales_name, day_key).
+
+    day_key boleh 0-based (dari _build_from_territories) atau
+    1-based (dari plan.assignments) — sort konsisten untuk keduanya.
+    """
+    return [
+        SalesScheduleOut(
+            sales_name = sn,
+            days = [
+                DayOut(
+                    day_of_week    = d["dow"],
+                    store_count    = len(d["codes"]),
+                    customer_codes = d["codes"],
+                    ganjil_codes   = d["ganjil"],
+                    genap_codes    = d["genap"],
+                )
+                for _, d in sorted(days_map.items())
+            ],
+        )
+        for sn, days_map in sorted(agg.items())
+    ]
 
 
 # ── Shared output models ───────────────────────────────────────────────────────
@@ -177,10 +224,12 @@ class GeneratePlanResponse(BaseModel):
 # ── Stage 2 models ─────────────────────────────────────────────────────────────
 
 class Stage2DivisionIn(BaseModel):
-    div_sls:   str
-    work_days: int  = Field(..., ge=1, le=7)
-    cycle:     str  = Field(..., pattern=r"^(M1|M2)$")
-    philosophy:str  = Field(..., pattern=r"^(BLOCKING|TRAFFIC)$")
+    div_sls:           str
+    n_sales:           int   = Field(default=1, ge=1, le=200)   # dipakai TRAFFIC: partisi sales per hari
+    work_days:         int   = Field(..., ge=1, le=7)
+    cycle:             str   = Field(..., pattern=r"^(M1|M2)$")
+    philosophy:        str   = Field(..., pattern=r"^(BLOCKING|TRAFFIC)$")
+    balance_tolerance: float = Field(default=0.10, ge=0.05, le=0.50)
 
 
 class Stage2Request(BaseModel):
@@ -203,6 +252,8 @@ class Stage2Response(BaseModel):
 class Stage1DivisionIn(BaseModel):
     div_sls:           str
     n_sales:           int   = Field(..., ge=1, le=200)
+    work_days:         int   = Field(default=6, ge=1, le=7)
+    philosophy:        str   = Field(default="BLOCKING", pattern=r"^(BLOCKING|TRAFFIC)$")
     balance_tolerance: float = Field(default=0.10, ge=0.05, le=0.50)
 
 
@@ -274,7 +325,7 @@ def generate_plan(
                 customer_code=s["customer_code"],
                 latitude=float(s["latitude"]),
                 longitude=float(s["longitude"]),
-                visit_frequency=VisitFrequency.BIWEEKLY,
+                visit_frequency=_store_visit_freq(s.get("visit_frequency")),
             )
             for s in div_raw
         ]
@@ -284,17 +335,19 @@ def generate_plan(
             vid = str(uuid.uuid4())
             store_map = {s.customer_code: s for s in stores}
             t_out, s_out, a_dicts = _build_from_territories(
-                store_map   = store_map,
-                territories = div.territories,
-                work_days   = div.work_days,
-                cycle       = div.cycle,
-                philosophy  = div.philosophy,
-                depo_lat    = req.depo_lat,
-                depo_lon    = req.depo_lon,
-                kd_dist     = req.kd_dist,
-                div_sls     = div.div_sls,
-                plan_id     = f"{plan_id}-{div.div_sls}",
-                version_id  = vid,
+                store_map         = store_map,
+                territories       = div.territories,
+                n_sales           = div.n_sales,
+                work_days         = div.work_days,
+                cycle             = div.cycle,
+                philosophy        = div.philosophy,
+                depo_lat          = req.depo_lat,
+                depo_lon          = req.depo_lon,
+                kd_dist           = req.kd_dist,
+                div_sls           = div.div_sls,
+                plan_id           = f"{plan_id}-{div.div_sls}",
+                version_id        = vid,
+                balance_tolerance = div.balance_tolerance,
             )
             logger.info(
                 "Division %s (locked territories): %d stores → %d assignments",
@@ -331,8 +384,11 @@ def generate_plan(
         )
 
         if req.dry_run:
-            # ── Territories dari partition_sales (re-run, deterministik) ───────
-            partition = engine_inst.partition_sales(stores, config, div.div_sls)
+            # ── Territories: re-run partisi sesuai filosofi (deterministik) ────
+            if div.philosophy == "TRAFFIC":
+                partition = engine_inst.partition_days(stores, config, div.div_sls)
+            else:
+                partition = engine_inst.partition_sales(stores, config, div.div_sls)
             territories_out = [
                 TerritoryOut(
                     sales_index    = t.sales_index,
@@ -349,37 +405,16 @@ def generate_plan(
             agg: Dict[str, Dict[int, dict]] = {}
             for a in plan.assignments:
                 sn = a.sales_person_name
-                if sn not in agg:
-                    agg[sn] = {}
+                agg.setdefault(sn, {})
                 if a.day_index not in agg[sn]:
-                    agg[sn][a.day_index] = {
-                        "dow": a.day_of_week, "codes": [], "ganjil": [], "genap": []
-                    }
-                d = agg[sn][a.day_index]
+                    agg[sn][a.day_index] = {"dow": a.day_of_week, "codes": [], "ganjil": [], "genap": []}
+                d   = agg[sn][a.day_index]
+                vg  = getattr(a, "visit_ganjil", False)
+                ve  = getattr(a, "visit_genap",  False)
                 d["codes"].append(a.customer_code)
-                vg = getattr(a, "visit_ganjil", False)
-                ve = getattr(a, "visit_genap",  False)
-                if vg and not ve:
-                    d["ganjil"].append(a.customer_code)
-                elif ve and not vg:
-                    d["genap"].append(a.customer_code)
-
-            schedule_out = [
-                SalesScheduleOut(
-                    sales_name=sn,
-                    days=[
-                        DayOut(
-                            day_of_week=d["dow"],
-                            store_count=len(d["codes"]),
-                            customer_codes=d["codes"],
-                            ganjil_codes=d["ganjil"],
-                            genap_codes=d["genap"],
-                        )
-                        for _, d in sorted(days_map.items())
-                    ]
-                )
-                for sn, days_map in sorted(agg.items())
-            ]
+                if vg and not ve:   d["ganjil"].append(a.customer_code)
+                elif ve and not vg: d["genap"].append(a.customer_code)
+            schedule_out = _agg_to_schedule_out(agg)
 
             preview_divs.append(DivPreviewOut(
                 div_sls=div.div_sls,
@@ -447,21 +482,29 @@ def generate_plan(
 # ── Helper: build schedule + assignments dari territories pre-assigned ────────
 
 def _build_from_territories(
-    store_map   : dict,             # {customer_code: Store}
-    territories : List[TerritoryIn],
-    work_days   : int,
-    cycle       : str,
-    philosophy  : str,
-    depo_lat    : float,
-    depo_lon    : float,
-    kd_dist     : str,
-    div_sls     : str,
-    plan_id     : str,
-    version_id  : str,
+    store_map         : dict,             # {customer_code: Store}
+    territories       : List[TerritoryIn],
+    work_days         : int,
+    cycle             : str,
+    philosophy        : str,
+    depo_lat          : float,
+    depo_lon          : float,
+    kd_dist           : str,
+    div_sls           : str,
+    plan_id           : str,
+    version_id        : str,
+    n_sales           : int   = 1,     # dipakai TRAFFIC: partisi sales per hari
+    balance_tolerance : float = 0.10,  # toleransi kerataan sub-partisi TRAFFIC
 ) -> "tuple[List[TerritoryOut], List[SalesScheduleOut], List[dict]]":
     """
-    Dari territories pre-assigned, jalankan bearing-based day scheduling.
-    Skip K-Means — langsung ke day assignment per territory.
+    Dari territories pre-assigned, jalankan day/sales scheduling.
+    Skip K-Means — langsung ke assignment dari territories yang ada.
+
+    BLOCKING (territories = wilayah sales):
+      Setiap territory → slice_by_bearing → day blocks.
+
+    TRAFFIC (territories = hari-zones, hasil partition_days()):
+      Setiap territory → balanced_partition(n_sales) → sales blocks per hari.
 
     Return: (territories_out, schedule_out, assignment_dicts)
       - territories_out  : untuk preview peta
@@ -470,35 +513,52 @@ def _build_from_territories(
     """
     from collections import defaultdict as _dd
 
-    is_m2   = Cycle(cycle) == Cycle.M2
-    depo    = (depo_lat, depo_lon)
+    is_m2      = Cycle(cycle) == Cycle.M2
+    is_traffic = philosophy == Philosophy.TRAFFIC.value
+    depo       = (depo_lat, depo_lon)
 
     blocks: dict              = _dd(list)   # (sales_idx, day_idx0) → [Store]
     territories_out: List[TerritoryOut] = []
 
     for t in territories:
-        sales_stores = [store_map[c] for c in t.customer_codes if c in store_map]
-        if not sales_stores:
+        t_stores = [store_map[c] for c in t.customer_codes if c in store_map]
+        if not t_stores:
             continue
 
-        # Day assignment: bearing dari centroid wilayah sales (identik build_blocking)
-        ctr                     = centroid([s.coord for s in sales_stores])
-        day_labels              = slice_by_bearing(sales_stores, ctr, work_days)
-        ct_lat, ct_lon          = ctr
+        ct_lat, ct_lon = centroid([s.coord for s in t_stores])
 
-        for s in sales_stores:
-            blocks[(t.sales_index, day_labels[s.customer_code])].append(s)
+        if is_traffic:
+            # TRAFFIC: territory = day-zone (sales_index = day_idx, sales_name = hari)
+            day_idx = t.sales_index
+            if n_sales > 1 and len(t_stores) >= n_sales:
+                sales_labels = balanced_partition(
+                    t_stores, n_sales,
+                    criterion=BalanceCriterion.COUNT,
+                    random_state=42,
+                    tolerance=balance_tolerance,
+                )
+                for s in t_stores:
+                    blocks[(sales_labels[s.customer_code], day_idx)].append(s)
+            else:
+                for s in t_stores:
+                    blocks[(0, day_idx)].append(s)
+        else:
+            # BLOCKING: territory = wilayah sales → slice hari via bearing
+            ctr        = (ct_lat, ct_lon)
+            day_labels = slice_by_bearing(t_stores, ctr, work_days)
+            for s in t_stores:
+                blocks[(t.sales_index, day_labels[s.customer_code])].append(s)
 
         territories_out.append(TerritoryOut(
             sales_index    = t.sales_index,
             sales_name     = t.sales_name,
-            store_count    = len(sales_stores),
+            store_count    = len(t_stores),
             centroid_lat   = ct_lat,
             centroid_lon   = ct_lon,
-            customer_codes = [s.customer_code for s in sales_stores],
+            customer_codes = [s.customer_code for s in t_stores],
         ))
 
-    # ── Stage 3: sequencing per blok (sales, hari) ──────────────────────────────
+    # ── Stage 3: sequencing per blok (sales, hari) ─────────────────────────────
     agg: Dict[str, Dict[int, dict]] = {}       # sn → {day_idx0 → {...}}
     assignment_dicts: List[dict] = []
 
@@ -506,30 +566,28 @@ def _build_from_territories(
         block_stores = blocks[(sales_idx, day_idx0)]
         ordered      = nn_tour(block_stores, depo)
         gg           = split_ganjil_genap(ordered) if is_m2 else None
+        day_index    = day_idx0 + 1
+        dow          = day_name(day_idx0)
 
-        t_info     = next((t for t in territories if t.sales_index == sales_idx), None)
-        sales_name = t_info.sales_name if t_info else f"{kd_dist}-{div_sls}-{sales_idx+1:02d}"
-        day_index  = day_idx0 + 1
-        dow        = day_name(day_idx0)
+        if is_traffic:
+            # TRAFFIC: sales_name derived dari sales_idx (konsisten cross-hari)
+            sales_name = f"{kd_dist}-{div_sls}-{sales_idx+1:02d}"
+        else:
+            # BLOCKING: sales_name dari territory
+            t_info     = next((t for t in territories if t.sales_index == sales_idx), None)
+            sales_name = t_info.sales_name if t_info else f"{kd_dist}-{div_sls}-{sales_idx+1:02d}"
 
-        if sales_name not in agg:
-            agg[sales_name] = {}
+        agg.setdefault(sales_name, {})
         if day_idx0 not in agg[sales_name]:
             agg[sales_name][day_idx0] = {"dow": dow, "codes": [], "ganjil": [], "genap": []}
         d = agg[sales_name][day_idx0]
 
         for visit_order, s in enumerate(ordered, 1):
-            if is_m2 and gg:
-                ganjil, genap = gg[s.customer_code]
-            else:
-                ganjil, genap = True, True
+            ganjil, genap = (gg[s.customer_code] if is_m2 and gg else (True, True))
 
             d["codes"].append(s.customer_code)
-            vg, ve = ganjil, genap
-            if vg and not ve:
-                d["ganjil"].append(s.customer_code)
-            elif ve and not vg:
-                d["genap"].append(s.customer_code)
+            if ganjil and not genap:   d["ganjil"].append(s.customer_code)
+            elif genap and not ganjil: d["genap"].append(s.customer_code)
 
             assignment_dicts.append({
                 "div_sls":           div_sls,
@@ -546,24 +604,7 @@ def _build_from_territories(
                 "version_id":        version_id,
             })
 
-    schedule_out = [
-        SalesScheduleOut(
-            sales_name = sn,
-            days = [
-                DayOut(
-                    day_of_week    = d["dow"],
-                    store_count    = len(d["codes"]),
-                    customer_codes = d["codes"],
-                    ganjil_codes   = d["ganjil"],
-                    genap_codes    = d["genap"],
-                )
-                for _, d in sorted(days_map.items())
-            ],
-        )
-        for sn, days_map in sorted(agg.items())
-    ]
-
-    return territories_out, schedule_out, assignment_dicts
+    return territories_out, _agg_to_schedule_out(agg), assignment_dicts
 
 
 # ── Stage 2: day scheduling dari territories pre-assigned ─────────────────────
@@ -598,23 +639,25 @@ def stage2(
             customer_code  = s["customer_code"],
             latitude       = float(s["latitude"]),
             longitude      = float(s["longitude"]),
-            visit_frequency= VisitFrequency.BIWEEKLY,
+            visit_frequency= _store_visit_freq(s.get("visit_frequency")),
         )
         for s in div_raw
     }
 
     territories_out, schedule_out, _ = _build_from_territories(
-        store_map   = store_map,
-        territories = req.territories,
-        work_days   = div.work_days,
-        cycle       = div.cycle,
-        philosophy  = div.philosophy,
-        depo_lat    = req.depo_lat,
-        depo_lon    = req.depo_lon,
-        kd_dist     = req.kd_dist,
-        div_sls     = div.div_sls,
-        plan_id     = "preview",
-        version_id  = str(uuid.uuid4()),
+        store_map         = store_map,
+        territories       = req.territories,
+        n_sales           = div.n_sales,
+        work_days         = div.work_days,
+        cycle             = div.cycle,
+        philosophy        = div.philosophy,
+        depo_lat          = req.depo_lat,
+        depo_lon          = req.depo_lon,
+        kd_dist           = req.kd_dist,
+        div_sls           = div.div_sls,
+        plan_id           = "preview",
+        version_id        = str(uuid.uuid4()),
+        balance_tolerance = div.balance_tolerance,
     )
 
     if not territories_out:
@@ -664,7 +707,7 @@ def stage1(
                 customer_code=s["customer_code"],
                 latitude=float(s["latitude"]),
                 longitude=float(s["longitude"]),
-                visit_frequency=VisitFrequency.BIWEEKLY,
+                visit_frequency=_store_visit_freq(s.get("visit_frequency")),
             )
             for s in div_raw
         ]
@@ -673,13 +716,20 @@ def stage1(
             n_sales=div.n_sales,
             depo_lat=req.depo_lat,
             depo_lon=req.depo_lon,
+            work_days=div.work_days,
+            philosophy=Philosophy(div.philosophy),
             balance_tolerance=div.balance_tolerance,
             balance_criterion=BalanceCriterion.COUNT,
             depo_id=req.kd_dist,
             base_name=div.div_sls,
         )
 
-        partition: SalesPartition = engine.partition_sales(stores, config, div.div_sls)
+        # TRAFFIC Stage 1: partisi ke hari (day-zones, "keroyokan")
+        # BLOCKING Stage 1: partisi ke wilayah sales
+        if div.philosophy == "TRAFFIC":
+            partition: SalesPartition = engine.partition_days(stores, config, div.div_sls)
+        else:
+            partition = engine.partition_sales(stores, config, div.div_sls)
 
         results.append(DivisionPartitionOut(
             div_sls=partition.div_sls,

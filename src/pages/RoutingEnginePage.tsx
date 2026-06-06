@@ -106,12 +106,13 @@ interface SelectedDayFilter {
 }
 
 interface SelectedSales {
-  divId     : string
-  salesName : string
-  salesIdx  : number
-  dayMap?   : Record<string, string[]>   // semua hari sales ini
-  dayFilter?: SelectedDayFilter           // filter ke hari+minggu tertentu
-  weekView? : 'ganjil' | 'genap'         // filter ke satu minggu saja
+  divId            : string
+  salesName        : string
+  salesIdx         : number
+  dayMap?          : Record<string, string[]>   // semua hari sales ini (per-sales view)
+  dayFilter?       : SelectedDayFilter           // filter ke hari+minggu tertentu
+  weekView?        : 'ganjil' | 'genap'         // filter ke satu minggu saja
+  dayViewSalesMap? : Record<string, string[]>   // per-hari view: sales_name → codes di hari itu
 }
 
 interface StoreStyle { fillColor:string; label?:string }
@@ -241,17 +242,38 @@ function PlanMap({ lat, lon, zoom, stores, storeStyles, selectedCodes, onStoreCl
 // StoreInfoCard — overlay popup saat toko diklik di peta
 // ─────────────────────────────────────────────────────────────────────────────
 
-function StoreInfoCard({ sel, territories, onReassign, onClose }: {
+function StoreInfoCard({ sel, territories, schedule, philosophy, onReassign, onClose }: {
   sel         : SelectedStore
   territories : Territory[]
+  schedule?   : SalesSchedule[]
+  philosophy? : Philosophy
   onReassign  : (newSalesName: string) => void
   onClose     : () => void
 }) {
   const { store, stage, pos } = sel
+  const isTraffic = philosophy === 'TRAFFIC'
 
   const currentTerritory = territories.find(t => t.customer_codes.includes(store.customer_code))
   const currentSales     = currentTerritory?.sales_name ?? '—'
   const canReassign      = stage === 's1_done' && territories.length > 1
+
+  // Cari hari + pekan dari schedule (tersedia saat s2_preview / s2_done)
+  const scheduleInfo: { day_of_week: string; pekan: 'ganjil' | 'genap' | null } | null = (() => {
+    if (!schedule) return null
+    for (const ss of schedule) {
+      for (const d of ss.days) {
+        if (d.customer_codes.includes(store.customer_code)) {
+          return {
+            day_of_week : d.day_of_week,
+            pekan       : d.ganjil_codes.includes(store.customer_code) ? 'ganjil'
+                        : d.genap_codes.includes(store.customer_code)  ? 'genap'
+                        : null,
+          }
+        }
+      }
+    }
+    return null
+  })()
 
   // Flip popup di bawah marker jika terlalu dekat tepi atas layar
   const flipBelow = pos.y < 230
@@ -306,8 +328,8 @@ function StoreInfoCard({ sel, territories, onReassign, onClose }: {
           <div className="flex items-center gap-xs">
             <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 14 }}>person</span>
             <div className="flex-1 min-w-0">
-              <p className="text-[10px] text-on-surface-variant">Salesperson</p>
-              <p className="text-xs font-semibold text-on-surface font-data-mono truncate">{salesLabel(currentSales)}</p>
+              <p className="text-[10px] text-on-surface-variant">{isTraffic ? 'Zone Hari' : 'Salesperson'}</p>
+              <p className="text-xs font-semibold text-on-surface font-data-mono truncate">{isTraffic ? currentSales : salesLabel(currentSales)}</p>
             </div>
             {store.omset != null && store.omset > 0 && (
               <div className="text-right shrink-0">
@@ -317,13 +339,36 @@ function StoreInfoCard({ sel, territories, onReassign, onClose }: {
             )}
           </div>
 
-          {/* Jadwal — s2_preview */}
-          {(stage === 's2_preview' || stage === 's2_done') && (
+          {/* Jadwal — hari + pekan (s2_preview / s2_done) */}
+          {scheduleInfo ? (
             <div className="flex items-center gap-xs">
               <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 14 }}>calendar_today</span>
               <div className="flex-1 min-w-0">
                 <p className="text-[10px] text-on-surface-variant">Jadwal</p>
-                <p className="text-xs font-semibold text-on-surface">lihat di panel kanan →</p>
+                <div className="flex items-center gap-[6px] mt-[1px] flex-wrap">
+                  <div className="flex items-center gap-[3px]">
+                    <div className="w-[7px] h-[7px] rounded-full shrink-0"
+                         style={{ background: DAY_COLORS[scheduleInfo.day_of_week] ?? '#9099a8' }} />
+                    <span className="text-xs font-semibold text-on-surface">{scheduleInfo.day_of_week}</span>
+                  </div>
+                  {scheduleInfo.pekan && (
+                    <span className="text-[10px] font-bold px-[5px] py-[1px] rounded-full"
+                          style={{
+                            color      : scheduleInfo.pekan === 'ganjil' ? WEEK_GANJIL_COLOR : WEEK_GENAP_COLOR,
+                            background : scheduleInfo.pekan === 'ganjil' ? 'rgba(99,102,241,0.10)' : 'rgba(249,115,22,0.10)',
+                          }}>
+                      {scheduleInfo.pekan === 'ganjil' ? WEEK_LABEL_GANJIL : WEEK_LABEL_GENAP}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (stage === 's1_done') && (
+            <div className="flex items-center gap-xs">
+              <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 14 }}>calendar_today</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] text-on-surface-variant">Jadwal</p>
+                <p className="text-[10px] text-on-surface-variant italic">Belum dijadwalkan</p>
               </div>
             </div>
           )}
@@ -336,13 +381,16 @@ function StoreInfoCard({ sel, territories, onReassign, onClose }: {
                 {territories
                   .filter(t => t.sales_name !== currentSales)
                   .map(t => {
-                    const color = TERRITORY_COLORS[t.sales_index % TERRITORY_COLORS.length]
+                    const color = isTraffic
+                      ? (DAY_COLORS[t.sales_name] ?? TERRITORY_COLORS[t.sales_index % TERRITORY_COLORS.length])
+                      : TERRITORY_COLORS[t.sales_index % TERRITORY_COLORS.length]
+                    const label = isTraffic ? t.sales_name : salesLabel(t.sales_name)
                     return (
                       <button key={t.sales_name} onClick={() => onReassign(t.sales_name)}
                               className="flex items-center gap-[4px] px-sm py-[4px] rounded-lg border text-[11px] font-semibold transition-colors"
                               style={{ borderColor: `${color}55`, color, background: `${color}0d` }}>
                         <span className="material-symbols-outlined" style={{ fontSize: 11 }}>arrow_forward</span>
-                        {salesLabel(t.sales_name)}
+                        {label}
                       </button>
                     )
                   })
@@ -357,7 +405,9 @@ function StoreInfoCard({ sel, territories, onReassign, onClose }: {
           )}
 
           {stage === 's1_done' && territories.length <= 1 && (
-            <p className="text-[10px] text-on-surface-variant">Hanya 1 salesperson dalam divisi ini.</p>
+            <p className="text-[10px] text-on-surface-variant">
+              {isTraffic ? 'Hanya 1 zone hari dalam divisi ini.' : 'Hanya 1 salesperson dalam divisi ini.'}
+            </p>
           )}
           {stage === 'idle' && (
             <p className="text-[10px] text-on-surface-variant">Jalankan Stage 1 untuk melihat wilayah.</p>
@@ -385,11 +435,12 @@ function StoreInfoCard({ sel, territories, onReassign, onClose }: {
 // MultiSelectBar — floating pill saat Ctrl+klik beberapa toko
 // ─────────────────────────────────────────────────────────────────────────────
 
-function MultiSelectBar({ selectedCodes, stores, omsetByCode, divisionStates, onReassignAll, onClear }: {
+function MultiSelectBar({ selectedCodes, stores, omsetByCode, divisionStates, divisions, onReassignAll, onClear }: {
   selectedCodes  : Set<string>
   stores         : StorePoint[]
   omsetByCode    : Record<string,number>
   divisionStates : Map<string,DivisionState>
+  divisions      : DivisionConfig[]
   onReassignAll  : (divId:string, newSalesName:string) => void
   onClear        : () => void
 }) {
@@ -402,6 +453,7 @@ function MultiSelectBar({ selectedCodes, stores, omsetByCode, divisionStates, on
   const divState   = singleDiv ? divisionStates.get(singleDiv) : null
   const territories= divState?.territories ?? []
   const canReassign= singleDiv !== null && divState?.stage === 's1_done' && territories.length > 1
+  const isTraffic  = singleDiv ? divisions.find(d => d.id === singleDiv)?.philosophy === 'TRAFFIC' : false
 
   return (
     <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-[900] flex items-center gap-sm px-sm py-[8px] rounded-2xl shadow-2xl select-none"
@@ -436,13 +488,16 @@ function MultiSelectBar({ selectedCodes, stores, omsetByCode, divisionStates, on
               // Sembunyikan jika semua toko yg dipilih sudah ada di territory ini
               const allHere = selList.every(s => t.customer_codes.includes(s.customer_code))
               if (allHere) return null
-              const color = TERRITORY_COLORS[t.sales_index % TERRITORY_COLORS.length]
+              const color = isTraffic
+                ? (DAY_COLORS[t.sales_name] ?? TERRITORY_COLORS[t.sales_index % TERRITORY_COLORS.length])
+                : TERRITORY_COLORS[t.sales_index % TERRITORY_COLORS.length]
+              const label = isTraffic ? t.sales_name : salesLabel(t.sales_name)
               return (
                 <button key={t.sales_name}
                         onClick={() => onReassignAll(singleDiv!, t.sales_name)}
                         className="flex items-center gap-[3px] px-[8px] py-[3px] rounded-full text-[11px] font-bold transition-all hover:scale-105 active:scale-95 shrink-0"
                         style={{ background:`${color}22`, border:`1px solid ${color}55`, color:'#fff' }}>
-                  {salesLabel(t.sales_name)}
+                  {label}
                 </button>
               )
             })}
@@ -510,6 +565,7 @@ function DivisionAccordion({ div, divState, onParamChange, onToggle, onRunStage1
   const isPreview= stage==='s2_preview'
   const isDone   = stage==='s2_done'
   const hasWilayah = stage==='s1_done'||isPreview||isDone
+  const isTraffic = div.philosophy === 'TRAFFIC'
 
   const borderColor = isDone?'rgba(12,148,136,0.45)':isPreview?'rgba(124,58,237,0.35)':hasWilayah?'rgba(59,130,246,0.35)':valid?'rgba(80,95,118,0.25)':'rgba(80,95,118,0.12)'
 
@@ -539,21 +595,41 @@ function DivisionAccordion({ div, divState, onParamChange, onToggle, onRunStage1
       {div.expanded&&(
         <div className="flex flex-col gap-sm p-sm" style={{background:'#fff'}}>
 
-          {/* Sales + Hari */}
+          {/* Sales + Hari — urutan label S1/S2 berubah sesuai filosofi */}
           <div className="grid grid-cols-2 gap-xs">
             <div className="flex flex-col gap-[3px]">
-              <label className="text-[9px] font-bold tracking-widest uppercase text-on-surface-variant">Jumlah Sales</label>
-              <input type="number" min={1} max={200} placeholder="cth: 5" value={div.n_sales}
-                     onChange={e=>onParamChange({n_sales:e.target.value})}
-                     className="w-full px-sm py-xs border border-outline-variant rounded-lg font-data-mono text-on-surface text-xs outline-none focus:border-primary transition-colors"
-                     style={{background:'#f7f9fb'}}/>
+              <label className="text-[9px] font-bold tracking-widest uppercase text-on-surface-variant flex items-center gap-[4px]">
+                {isTraffic ? 'Hari / Siklus' : 'Jumlah Sales'}
+                <span className="normal-case tracking-normal text-[8px] font-bold px-[4px] py-[1px] rounded-full"
+                      style={{background:'rgba(59,130,246,0.12)',color:'#1d4ed8'}}>S1</span>
+              </label>
+              {isTraffic
+                ? <input type="number" min={1} max={7} value={div.work_days}
+                         onChange={e=>onParamChange({work_days:e.target.value})}
+                         className="w-full px-sm py-xs border border-outline-variant rounded-lg font-data-mono text-on-surface text-xs outline-none focus:border-primary transition-colors"
+                         style={{background:'#f7f9fb'}}/>
+                : <input type="number" min={1} max={200} placeholder="cth: 5" value={div.n_sales}
+                         onChange={e=>onParamChange({n_sales:e.target.value})}
+                         className="w-full px-sm py-xs border border-outline-variant rounded-lg font-data-mono text-on-surface text-xs outline-none focus:border-primary transition-colors"
+                         style={{background:'#f7f9fb'}}/>
+              }
             </div>
             <div className="flex flex-col gap-[3px]">
-              <label className="text-[9px] font-bold tracking-widest uppercase text-on-surface-variant">Hari / Siklus</label>
-              <input type="number" min={1} max={7} value={div.work_days}
-                     onChange={e=>onParamChange({work_days:e.target.value})}
-                     className="w-full px-sm py-xs border border-outline-variant rounded-lg font-data-mono text-on-surface text-xs outline-none focus:border-primary transition-colors"
-                     style={{background:'#f7f9fb'}}/>
+              <label className="text-[9px] font-bold tracking-widest uppercase text-on-surface-variant flex items-center gap-[4px]">
+                {isTraffic ? 'Sales / Zone' : 'Hari / Siklus'}
+                <span className="normal-case tracking-normal text-[8px] font-bold px-[4px] py-[1px] rounded-full"
+                      style={{background:'rgba(124,58,237,0.10)',color:'#7c3aed'}}>S2</span>
+              </label>
+              {isTraffic
+                ? <input type="number" min={1} max={200} placeholder="cth: 2" value={div.n_sales}
+                         onChange={e=>onParamChange({n_sales:e.target.value})}
+                         className="w-full px-sm py-xs border border-outline-variant rounded-lg font-data-mono text-on-surface text-xs outline-none focus:border-primary transition-colors"
+                         style={{background:'#f7f9fb'}}/>
+                : <input type="number" min={1} max={7} value={div.work_days}
+                         onChange={e=>onParamChange({work_days:e.target.value})}
+                         className="w-full px-sm py-xs border border-outline-variant rounded-lg font-data-mono text-on-surface text-xs outline-none focus:border-primary transition-colors"
+                         style={{background:'#f7f9fb'}}/>
+              }
             </div>
           </div>
 
@@ -598,7 +674,12 @@ function DivisionAccordion({ div, divState, onParamChange, onToggle, onRunStage1
           {valid&&(
             <div className="flex items-center gap-xs rounded px-sm py-xs" style={{background:'rgba(12,148,136,0.08)',border:'1px solid rgba(12,148,136,0.2)'}}>
               <span className="material-symbols-outlined" style={{color:'#0c9488',fontSize:13}}>calculate</span>
-              <span className="text-[10px]" style={{color:'#0c9488'}}>{ns} × {wd} = <b>{ns*wd}</b> rute/{div.cycle==='M1'?'minggu':'2 minggu'}</span>
+              <span className="text-[10px]" style={{color:'#0c9488'}}>
+                {isTraffic
+                  ? <>{wd} zone × {ns} sales = <b>{ns*wd}</b> rute/{div.cycle==='M1'?'minggu':'2 minggu'}</>
+                  : <>{ns} × {wd} = <b>{ns*wd}</b> rute/{div.cycle==='M1'?'minggu':'2 minggu'}</>
+                }
+              </span>
             </div>
           )}
 
@@ -616,7 +697,7 @@ function DivisionAccordion({ div, divState, onParamChange, onToggle, onRunStage1
           {isRun&&(
             <div className="flex items-center justify-center gap-xs py-xs text-[11px] text-on-surface-variant">
               <span className="material-symbols-outlined animate-spin" style={{fontSize:14}}>sync</span>
-              <span>{stage==='s1_running'?'Membagi wilayah…':stage==='s2_saving'?'Menyimpan plan…':'Membuat jadwal preview…'}</span>
+              <span>{stage==='s1_running'?(isTraffic?'Membagi zone hari…':'Membagi wilayah…'):stage==='s2_saving'?'Menyimpan plan…':'Membuat jadwal preview…'}</span>
             </div>
           )}
 
@@ -634,8 +715,8 @@ function DivisionAccordion({ div, divState, onParamChange, onToggle, onRunStage1
               <button type="button" onClick={onRunStage1}
                       className={`flex-1 flex items-center justify-center gap-[4px] py-sm rounded-lg border text-[11px] font-semibold transition-colors ${hasWilayah?'border-blue-200 text-blue-600 hover:bg-blue-50':'border-outline-variant text-on-surface-variant hover:bg-surface-container'}`}
                       style={{background:hasWilayah?'rgba(59,130,246,0.06)':'#f7f9fb'}}>
-                <span className="material-symbols-outlined" style={{fontSize:13}}>{hasWilayah?'refresh':'map'}</span>
-                {hasWilayah?'Ulang Wilayah':'Bagi Wilayah'}
+                <span className="material-symbols-outlined" style={{fontSize:13}}>{hasWilayah?'refresh':(isTraffic?'calendar_view_week':'map')}</span>
+                {hasWilayah?(isTraffic?'Ulang Zone Hari':'Ulang Wilayah'):(isTraffic?'Bagi Zone Hari':'Bagi Wilayah')}
               </button>
               <button type="button" onClick={onRunStage2} disabled={stage==='idle'}
                       title={stage==='idle'?'Bagi wilayah dulu':''}
@@ -667,23 +748,25 @@ function DivisionAccordion({ div, divState, onParamChange, onToggle, onRunStage1
 // ─────────────────────────────────────────────────────────────────────────────
 
 function SummaryPanel({
-  divisions, divisionStates, omsetByCode, selectedSales, anyRunning,
-  onSelectSales, onRunStage2, onSavePlan, onNavigatePlans, onHide,
+  divisions, divisionStates, omsetByCode, selectedSales, anyRunning, viewMode,
+  onSelectSales, onRunStage2, onSavePlan, onNavigatePlans, onHide, onViewModeChange,
 }: {
-  divisions      : DivisionConfig[]
-  divisionStates : Map<string,DivisionState>
-  omsetByCode    : Record<string,number>
-  selectedSales  : SelectedSales | null
-  anyRunning     : boolean
-  onSelectSales  : (s:SelectedSales|null) => void
-  onRunStage2    : (divId:string) => void
-  onSavePlan     : () => void
-  onNavigatePlans: () => void
-  onHide         : () => void
+  divisions        : DivisionConfig[]
+  divisionStates   : Map<string,DivisionState>
+  omsetByCode      : Record<string,number>
+  selectedSales    : SelectedSales | null
+  anyRunning       : boolean
+  viewMode         : 'sales'|'day'
+  onSelectSales    : (s:SelectedSales|null) => void
+  onRunStage2      : (divId:string) => void
+  onSavePlan       : () => void
+  onNavigatePlans  : () => void
+  onHide           : () => void
+  onViewModeChange : (mode:'sales'|'day') => void
 }) {
   // Expand state: keys = "divId||salesName" dan "divId||salesName||day"
-  const [exSales, setExSales] = useState<Set<string>>(new Set())
-  const [exDays,  setExDays]  = useState<Set<string>>(new Set())
+  const [exSales,   setExSales]   = useState<Set<string>>(new Set())
+  const [exDays,    setExDays]    = useState<Set<string>>(new Set())
 
   const toggleSales = (k:string) => setExSales(p => { const n=new Set(p); n.has(k)?n.delete(k):n.add(k); return n })
   const toggleDay   = (k:string) => setExDays (p => { const n=new Set(p); n.has(k)?n.delete(k):n.add(k); return n })
@@ -733,6 +816,19 @@ function SummaryPanel({
           const sched= st.schedule
           const isM2 = div.cycle==='M2'
           const s1done= st.stage==='s1_done'
+          const isTraffic = div.philosophy === 'TRAFFIC'
+          // TRAFFIC s2_preview: territories = day-zones, tapi schedule per sales.
+          // Derive virtual territories dari sched agar accordion bisa match correctly.
+          const displayTerr: Territory[] = (isTraffic && sched && sched.length > 0)
+            ? sched.map((ss, i) => ({
+                sales_index    : i,
+                sales_name     : ss.sales_name,
+                store_count    : ss.days.reduce((s, d) => s + d.store_count, 0),
+                centroid_lat   : 0,
+                centroid_lon   : 0,
+                customer_codes : ss.days.flatMap(d => d.customer_codes),
+              }))
+            : terr
 
           return (
             <div key={div.id} className="px-sm pt-sm pb-[2px]">
@@ -752,11 +848,138 @@ function SummaryPanel({
                 )}
               </div>
 
-              {/* Per-sales accordion */}
+              {/* ── Summary metrics (s2_preview / s2_done) ── */}
+              {sched && sched.length > 0 && (() => {
+                const allDayCounts = sched.flatMap(ss => ss.days.map(d => d.store_count))
+                const avg = allDayCounts.length ? (allDayCounts.reduce((a,b)=>a+b,0)/allDayCounts.length) : 0
+                const minC = Math.min(...allDayCounts)
+                const maxC = Math.max(...allDayCounts)
+                const totalToko = terr.reduce((s,t)=>s+t.store_count, 0)
+                const totalOmset = Object.keys(omsetByCode).length
+                  ? terr.reduce((s,t)=>s+t.customer_codes.reduce((ss,c)=>ss+(omsetByCode[c]??0),0),0)
+                  : 0
+                return (
+                  <div className="flex items-stretch gap-[4px] mb-[5px]">
+                    {/* Avg per hari */}
+                    <div className="flex-1 rounded-lg flex flex-col items-center justify-center py-[5px] px-[4px]"
+                         style={{background:'rgba(59,130,246,0.07)',border:'1px solid rgba(59,130,246,0.15)'}}>
+                      <span className="text-[9px] text-on-surface-variant leading-tight mb-[1px]">rata-rata/hari</span>
+                      <span className="text-[13px] font-bold font-data-mono" style={{color:'#1d4ed8'}}>{avg.toFixed(1)}</span>
+                    </div>
+                    {/* Min-Max per sales per hari */}
+                    <div className="flex-1 rounded-lg flex flex-col items-center justify-center py-[5px] px-[4px]"
+                         style={{background:'rgba(80,95,118,0.05)',border:'1px solid rgba(80,95,118,0.12)'}}>
+                      <span className="text-[9px] text-on-surface-variant leading-tight mb-[1px]">min–max</span>
+                      <span className="text-[12px] font-bold font-data-mono text-on-surface">{minC}–{maxC}</span>
+                    </div>
+                    {/* Total toko */}
+                    <div className="flex-1 rounded-lg flex flex-col items-center justify-center py-[5px] px-[4px]"
+                         style={{background:'rgba(12,148,136,0.06)',border:'1px solid rgba(12,148,136,0.15)'}}>
+                      <span className="text-[9px] text-on-surface-variant leading-tight mb-[1px]">total toko</span>
+                      <span className="text-[13px] font-bold font-data-mono" style={{color:'#0c9488'}}>{totalToko}</span>
+                    </div>
+                    {/* Omset total (if available) */}
+                    {totalOmset > 0 && (
+                      <div className="flex-1 rounded-lg flex flex-col items-center justify-center py-[5px] px-[4px]"
+                           style={{background:'rgba(124,58,237,0.05)',border:'1px solid rgba(124,58,237,0.12)'}}>
+                        <span className="text-[9px] text-on-surface-variant leading-tight mb-[1px]">omset</span>
+                        <span className="text-[12px] font-bold font-data-mono" style={{color:'#7c3aed'}}>{formatOmset(totalOmset)}</span>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+
+              {/* Toggle Per Sales / Per Hari — hanya tampil saat ada jadwal */}
+              {sched && sched.length > 0 && (
+                <div className="flex mb-[6px] rounded-lg overflow-hidden" style={{border:'1px solid rgba(80,95,118,0.15)'}}>
+                  <button type="button" onClick={()=>onViewModeChange('sales')}
+                          className={`flex-1 flex items-center justify-center gap-[4px] py-[5px] text-[10px] font-semibold transition-colors ${viewMode==='sales'?'bg-primary text-on-primary':'text-on-surface-variant hover:bg-surface-container'}`}
+                          style={{background:viewMode==='sales'?undefined:'#fff'}}>
+                    <span className="material-symbols-outlined" style={{fontSize:11}}>person</span>Per Sales
+                  </button>
+                  <button type="button" onClick={()=>onViewModeChange('day')}
+                          className={`flex-1 flex items-center justify-center gap-[4px] py-[5px] text-[10px] font-semibold transition-colors border-l ${viewMode==='day'?'bg-primary text-on-primary':'text-on-surface-variant hover:bg-surface-container'}`}
+                          style={{borderColor:'rgba(80,95,118,0.15)',background:viewMode==='day'?undefined:'#fff'}}>
+                    <span className="material-symbols-outlined" style={{fontSize:11}}>calendar_today</span>Per Hari
+                  </button>
+                </div>
+              )}
+
+              {/* Accordion */}
               <div className="rounded-lg overflow-hidden" style={{border:'1px solid rgba(80,95,118,0.12)'}}>
 
-                {terr.map((t,i) => {
-                  const color    = TERRITORY_COLORS[t.sales_index%TERRITORY_COLORS.length]
+                {/* ── Per-Hari view ── */}
+                {viewMode === 'day' && sched && sched.length > 0 && (() => {
+                  // Agregasi: { day_of_week → [{salesName, salesIdx, codes, gc, ec}] }
+                  const dayAgg: Record<string, Array<{salesName:string;salesIdx:number;codes:string[];gc:string[];ec:string[]}>> = {}
+                  sched.forEach((ss, si) => {
+                    ss.days.forEach(day => {
+                      if (!dayAgg[day.day_of_week]) dayAgg[day.day_of_week] = []
+                      dayAgg[day.day_of_week].push({
+                        salesName: ss.sales_name, salesIdx: si,
+                        codes: day.customer_codes, gc: day.ganjil_codes, ec: day.genap_codes,
+                      })
+                    })
+                  })
+                  return DAY_ORDER.filter(d => dayAgg[d]).map(dn => {
+                    const entries = dayAgg[dn]
+                    const dc      = DAY_COLORS[dn] ?? '#9099a8'
+                    const total   = entries.reduce((s,r) => s + r.codes.length, 0)
+                    const dayKey  = `${div.id}||day||${dn}`
+                    const isEx    = exSales.has(dayKey)
+                    const dvsm    = Object.fromEntries(entries.map(r => [r.salesName, r.codes]))
+                    const isSel   = selectedSales?.divId===div.id && selectedSales?.salesName===dn
+                                    && !!selectedSales?.dayViewSalesMap && !selectedSales?.dayFilter
+                    return (
+                      <div key={dn}>
+                        {/* Day header row */}
+                        <div className="flex items-center gap-[6px] px-sm py-[6px] cursor-pointer transition-colors"
+                             style={{background:isSel?'rgba(59,130,246,0.05)':'transparent',borderBottom:'1px solid rgba(80,95,118,0.07)',borderLeft:isSel?`3px solid ${dc}`:'3px solid transparent'}}
+                             onClick={()=>{ toggleSales(dayKey); if(isSel){onSelectSales(null);return} onSelectSales({divId:div.id,salesName:dn,salesIdx:-1,dayViewSalesMap:dvsm}) }}>
+                          <div className="w-[8px] h-[8px] rounded-full shrink-0" style={{background:dc}}/>
+                          <span className="flex-1 font-semibold text-[10px] text-on-surface">{dn}</span>
+                          <span className="text-[10px] text-on-surface-variant font-data-mono shrink-0">{total} toko</span>
+                          <span className="text-[9px] text-on-surface-variant shrink-0 ml-xs">{entries.length} sales</span>
+                          <span className="material-symbols-outlined text-on-surface-variant shrink-0" style={{fontSize:12}}>{isEx?'expand_less':'expand_more'}</span>
+                        </div>
+                        {/* Expanded: per-sales sub-rows */}
+                        {isEx && (
+                          <div style={{borderBottom:'1px solid rgba(80,95,118,0.07)'}}>
+                            {entries.map(r => {
+                              const sc    = TERRITORY_COLORS[r.salesIdx % TERRITORY_COLORS.length]
+                              const isSub = selectedSales?.divId===div.id && selectedSales?.salesName===r.salesName
+                                            && selectedSales?.dayFilter?.day_of_week===dn
+                              const omset = r.codes.reduce((s,c) => s+(omsetByCode[c]??0), 0)
+                              return (
+                                <div key={r.salesName}
+                                     className="flex items-center gap-[6px] px-[26px] py-[4px] cursor-pointer transition-colors"
+                                     style={{background:isSub?'rgba(59,130,246,0.05)':'rgba(80,95,118,0.01)',borderLeft:isSub?`2px solid ${sc}`:'2px solid transparent'}}
+                                     onClick={()=>{
+                                       if(isSub){onSelectSales({divId:div.id,salesName:dn,salesIdx:-1,dayViewSalesMap:dvsm});return}
+                                       onSelectSales({divId:div.id,salesName:r.salesName,salesIdx:r.salesIdx,
+                                         dayFilter:{day_of_week:dn,customer_codes:r.codes,ganjil_codes:r.gc,genap_codes:r.ec,isM2}})
+                                     }}>
+                                  <div className="w-[6px] h-[6px] rounded-[2px] shrink-0" style={{background:sc}}/>
+                                  <span className="flex-1 font-data-mono text-[10px] font-semibold text-on-surface">{salesLabel(r.salesName)}</span>
+                                  <span className="text-[10px] font-data-mono text-on-surface-variant shrink-0">{r.codes.length} toko</span>
+                                  {omset>0&&<span className="text-[10px] font-data-mono shrink-0" style={{color:'#0c9488'}}>{formatOmset(omset)}</span>}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })
+                })()}
+
+                {/* ── Per-Sales view (default, atau saat belum ada jadwal) ── */}
+                {(viewMode !== 'day' || !sched || !sched.length) && displayTerr.map((t,i) => {
+                  // TRAFFIC s1_done → day colors; BLOCKING / TRAFFIC s2_preview → territory colors
+                  const color    = (isTraffic && !sched)
+                    ? (DAY_COLORS[t.sales_name] ?? TERRITORY_COLORS[t.sales_index%TERRITORY_COLORS.length])
+                    : TERRITORY_COLORS[t.sales_index%TERRITORY_COLORS.length]
                   const salesKey = `${div.id}||${t.sales_name}`
                   const isExSales= exSales.has(salesKey)
                   const isSelThisSales = selectedSales?.divId===div.id && selectedSales?.salesName===t.sales_name
@@ -784,7 +1007,9 @@ function SummaryPanel({
                         }}
                       >
                         <div className="w-[8px] h-[8px] rounded-[2px] shrink-0" style={{background:color}}/>
-                        <span className="flex-1 font-data-mono text-[10px] font-semibold text-on-surface">{salesLabel(t.sales_name)}</span>
+                        <span className="flex-1 font-data-mono text-[10px] font-semibold text-on-surface">
+                          {(isTraffic && !sched) ? t.sales_name : salesLabel(t.sales_name)}
+                        </span>
                         <span className="text-[10px] text-on-surface-variant font-data-mono shrink-0">{t.store_count} toko</span>
                         {omset>0&&<span className="text-[10px] font-data-mono shrink-0" style={{color:'#0c9488'}}>{formatOmset(omset)}</span>}
                         <span className="material-symbols-outlined text-on-surface-variant shrink-0" style={{fontSize:12}}>
@@ -882,11 +1107,11 @@ function SummaryPanel({
                   <div className="w-[8px] h-[8px] shrink-0"/>
                   <span className="flex-1 text-[10px] font-bold text-on-surface">TOTAL</span>
                   <span className="text-[10px] font-bold font-data-mono text-on-surface shrink-0">
-                    {terr.reduce((s,t)=>s+t.store_count,0)} toko
+                    {displayTerr.reduce((s,t)=>s+t.store_count,0)} toko
                   </span>
                   {Object.keys(omsetByCode).length>0&&(
                     <span className="text-[10px] font-bold font-data-mono shrink-0" style={{color:'#0c9488'}}>
-                      {formatOmset(terr.reduce((s,t)=>s+t.customer_codes.reduce((ss,c)=>ss+(omsetByCode[c]??0),0),0))}
+                      {formatOmset(displayTerr.reduce((s,t)=>s+t.customer_codes.reduce((ss,c)=>ss+(omsetByCode[c]??0),0),0))}
                     </span>
                   )}
                 </div>
@@ -950,6 +1175,7 @@ export default function RoutingEnginePage() {
   const [leftHidden,     setLeftHidden]     = useState(false)
   const [rightHidden,    setRightHidden]    = useState(false)
   const [selectedSales,  setSelectedSales]  = useState<SelectedSales|null>(null)
+  const [summaryViewMode,setSummaryViewMode]= useState<'sales'|'day'>('sales')
   const [selectedStore,  setSelectedStore]  = useState<SelectedStore|null>(null)
   const [multiSelected,  setMultiSelected]  = useState<Set<string>>(new Set())
 
@@ -957,6 +1183,7 @@ export default function RoutingEnginePage() {
   useEffect(() => {
     setStores([]); setDivisions([]); setDivisionStates(new Map())
     setSelectedSales(null); setSelectedStore(null); setMultiSelected(new Set())
+    setSummaryViewMode('sales')
     if (!areaId) { setStoresLoading(false); return }
     let cancelled = false
     setStoresLoading(true)
@@ -1072,7 +1299,7 @@ export default function RoutingEnginePage() {
       const resp=await fetch(`${eu}/stage1`,{method:'POST',
         headers:{'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`},
         body:JSON.stringify({area_id:activeArea.id,kd_dist:activeArea.kd_dist,depo_lat:Number(activeArea.lat),depo_lon:Number(activeArea.lon),
-          divisions:[{div_sls:div.div_sls,n_sales:parseInt(div.n_sales,10),balance_tolerance:div.balance_tolerance}]}),
+          divisions:[{div_sls:div.div_sls,n_sales:parseInt(div.n_sales,10),work_days:parseInt(div.work_days,10),philosophy:div.philosophy,balance_tolerance:div.balance_tolerance}]}),
         signal:AbortSignal.timeout(30_000)})
       if(!resp.ok){const b=await resp.json().catch(()=>({}));throw new Error(b.detail??`HTTP ${resp.status}`)}
       const data:{results:Array<{div_sls:string;territories:Territory[]}>}=await resp.json()
@@ -1112,7 +1339,8 @@ export default function RoutingEnginePage() {
         body:JSON.stringify({
           area_id:activeArea.id,kd_dist:activeArea.kd_dist,
           depo_lat:Number(activeArea.lat),depo_lon:Number(activeArea.lon),
-          division:{div_sls:div.div_sls,work_days:parseInt(div.work_days,10),cycle:div.cycle,philosophy:div.philosophy},
+          division:{div_sls:div.div_sls,n_sales:parseInt(div.n_sales,10),work_days:parseInt(div.work_days,10),
+                    cycle:div.cycle,philosophy:div.philosophy,balance_tolerance:div.balance_tolerance},
           territories,
         }),
         signal:AbortSignal.timeout(60_000)})
@@ -1187,17 +1415,33 @@ export default function RoutingEnginePage() {
         const codes=new Set(base)
         return stores.filter(s=>codes.has(s.customer_code))
       }
+      // 1.5 Per-Hari view: semua toko di hari ini (lintas semua sales)
+      if (selectedSales.dayViewSalesMap) {
+        const codes = new Set(Object.values(selectedSales.dayViewSalesMap).flat())
+        return stores.filter(s => codes.has(s.customer_code))
+      }
       // 2. Filter ke semua hari sales ini
       if (selectedSales.dayMap) {
         const codes=new Set(Object.values(selectedSales.dayMap).flat())
         return stores.filter(s=>codes.has(s.customer_code))
       }
       // 3. Territory-only mode
-      const t=divisionStates.get(selectedSales.divId)?.territories?.find(t=>t.sales_name===selectedSales.salesName)
+      // TRAFFIC s2_preview: territories = day-zones, tapi selectedSales.salesName = salesperson name.
+      // Gunakan sched sebagai sumber kebenaran jika tersedia.
+      const divDs = divisionStates.get(selectedSales.divId)
+      const divPhil3 = divisions.find(d=>d.id===selectedSales.divId)?.philosophy
+      if (divPhil3==='TRAFFIC' && divDs?.schedule && divDs.schedule.length>0) {
+        const ss = divDs.schedule.find(s=>s.sales_name===selectedSales.salesName)
+        if (ss) {
+          const codes = new Set(ss.days.flatMap(d=>d.customer_codes))
+          return stores.filter(s=>codes.has(s.customer_code))
+        }
+      }
+      const t=divDs?.territories?.find(t=>t.sales_name===selectedSales.salesName)
       if (t) { const codes=new Set(t.customer_codes); return stores.filter(s=>codes.has(s.customer_code)) }
     }
     return activeDivId ? stores.filter(s=>s.div_sls===activeDivId) : stores
-  },[stores,activeDivId,selectedSales,divisionStates])
+  },[stores,activeDivId,selectedSales,divisionStates,divisions])
 
   const storeStyles = useMemo<StoreStyleMap>(()=>{
     if (selectedSales) {
@@ -1225,6 +1469,15 @@ export default function RoutingEnginePage() {
         }
         return st
       }
+      // 1.5 Per-Hari view: warna per sales (biar bisa bedain siapa ke mana di hari yang sama)
+      if (selectedSales.dayViewSalesMap) {
+        const st: StoreStyleMap = {}
+        Object.entries(selectedSales.dayViewSalesMap).forEach(([salesName, codes], idx) => {
+          const color = TERRITORY_COLORS[idx % TERRITORY_COLORS.length]
+          codes.forEach(c => { st[c] = { fillColor: color, label: salesLabel(salesName) } })
+        })
+        return st
+      }
       // 2. Warna per hari (semua hari sales)
       if (selectedSales.dayMap) {
         const st:StoreStyleMap={}
@@ -1235,9 +1488,25 @@ export default function RoutingEnginePage() {
         return st
       }
       // 3. Territory color
-      const t=divisionStates.get(selectedSales.divId)?.territories?.find(t=>t.sales_name===selectedSales.salesName)
+      // TRAFFIC s2_preview: territories = day-zones, selectedSales.salesName = salesperson name.
+      // Gunakan sched sebagai sumber kebenaran jika tersedia.
+      const selDs   = divisionStates.get(selectedSales.divId)
+      const selPhil = divisions.find(d=>d.id===selectedSales.divId)?.philosophy
+      if (selPhil==='TRAFFIC' && selDs?.schedule && selDs.schedule.length>0) {
+        const ss = selDs.schedule.find(s=>s.sales_name===selectedSales.salesName)
+        if (ss) {
+          const idx   = selDs.schedule.indexOf(ss)
+          const color = TERRITORY_COLORS[idx%TERRITORY_COLORS.length]
+          const st:StoreStyleMap={}
+          ss.days.forEach(d=>d.customer_codes.forEach(c=>{ st[c]={fillColor:color,label:salesLabel(ss.sales_name)} }))
+          return st
+        }
+      }
+      const t=selDs?.territories?.find(t=>t.sales_name===selectedSales.salesName)
       if (t) {
-        const color=TERRITORY_COLORS[t.sales_index%TERRITORY_COLORS.length]
+        const color=selPhil==='TRAFFIC'
+          ?(DAY_COLORS[t.sales_name]??TERRITORY_COLORS[t.sales_index%TERRITORY_COLORS.length])
+          :TERRITORY_COLORS[t.sales_index%TERRITORY_COLORS.length]
         const st:StoreStyleMap={}
         t.customer_codes.forEach(c=>{ st[c]={fillColor:color,label:t.sales_name} })
         return st
@@ -1246,10 +1515,26 @@ export default function RoutingEnginePage() {
     if (!activeDivId) return {}
     const ds=divisionStates.get(activeDivId)
     if (!ds?.territories) return {}
+    const divPhil=divisions.find(d=>d.id===activeDivId)?.philosophy
+    // TRAFFIC + jadwal tersedia + mode Per Sales → warnai per salesman (bukan per day-zone)
+    if (divPhil==='TRAFFIC' && ds.schedule && ds.schedule.length>0 && summaryViewMode==='sales') {
+      const st:StoreStyleMap={}
+      ds.schedule.forEach((ss,idx)=>{
+        const color=TERRITORY_COLORS[idx%TERRITORY_COLORS.length]
+        ss.days.forEach(day=>{ day.customer_codes.forEach(c=>{ st[c]={fillColor:color,label:salesLabel(ss.sales_name)} }) })
+      })
+      return st
+    }
+    // Default: warnai per territories (day-zones untuk TRAFFIC, per-sales untuk BLOCKING)
     const st:StoreStyleMap={}
-    ds.territories.forEach(t=>{ const color=TERRITORY_COLORS[t.sales_index%TERRITORY_COLORS.length]; t.customer_codes.forEach(c=>{ st[c]={fillColor:color,label:t.sales_name} }) })
+    ds.territories.forEach(t=>{
+      const color=divPhil==='TRAFFIC'
+        ?(DAY_COLORS[t.sales_name]??TERRITORY_COLORS[t.sales_index%TERRITORY_COLORS.length])
+        :TERRITORY_COLORS[t.sales_index%TERRITORY_COLORS.length]
+      t.customer_codes.forEach(c=>{ st[c]={fillColor:color,label:t.sales_name} })
+    })
     return st
-  },[selectedSales,activeDivId,divisionStates])
+  },[selectedSales,summaryViewMode,activeDivId,divisionStates,divisions])
 
   const mapLat  = activeArea?Number(activeArea.lat):-2.5
   const mapLon  = activeArea?Number(activeArea.lon):118
@@ -1274,6 +1559,8 @@ export default function RoutingEnginePage() {
           <StoreInfoCard
             sel={selectedStore}
             territories={terrs}
+            schedule={divSt?.schedule}
+            philosophy={divisions.find(d => d.id === selectedStore.divId)?.philosophy}
             onReassign={(newSalesName) => {
               handleReassign(selectedStore.store.customer_code, selectedStore.divId, newSalesName)
               // Update stage di card setelah reassign
@@ -1291,6 +1578,7 @@ export default function RoutingEnginePage() {
           stores={stores}
           omsetByCode={storeOmsetMap}
           divisionStates={divisionStates}
+          divisions={divisions}
           onReassignAll={handleMultiReassign}
           onClear={() => setMultiSelected(new Set())}
         />
@@ -1302,12 +1590,20 @@ export default function RoutingEnginePage() {
           {/* Pill indikator atas tengah */}
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[500] flex items-center gap-xs px-sm py-xs rounded-full shadow-lg"
                style={{background:'rgba(255,255,255,0.95)',border:'1px solid rgba(124,58,237,0.3)'}}>
-            <span className="material-symbols-outlined ms-fill" style={{color:'#7c3aed',fontSize:13}}>visibility</span>
-            <span className="text-[11px] font-semibold text-on-surface">{salesLabel(selectedSales.salesName)}</span>
+            <span className="material-symbols-outlined ms-fill" style={{color:selectedSales.dayViewSalesMap?(DAY_COLORS[selectedSales.salesName]??'#7c3aed'):'#7c3aed',fontSize:13}}>
+              {selectedSales.dayViewSalesMap?'calendar_today':'visibility'}
+            </span>
+            <span className="text-[11px] font-semibold text-on-surface">
+              {selectedSales.dayViewSalesMap ? selectedSales.salesName : salesLabel(selectedSales.salesName)}
+            </span>
             {selectedSales.dayFilter
               ? <span className="text-[10px] text-on-surface-variant">
                   · {selectedSales.dayFilter.day_of_week} · {selectedSales.dayFilter.customer_codes.length} toko
                   {selectedSales.dayFilter.isM2?' · warna minggu':''}
+                </span>
+              : selectedSales.dayViewSalesMap
+              ? <span className="text-[10px] text-on-surface-variant">
+                  · {Object.values(selectedSales.dayViewSalesMap).flat().length} toko · warna per sales
                 </span>
               : selectedSales.dayMap
               ? <span className="text-[10px] text-on-surface-variant">· {Object.values(selectedSales.dayMap).flat().length} toko · warna hari</span>
@@ -1320,7 +1616,20 @@ export default function RoutingEnginePage() {
           </div>
 
           {/* Legend — ganjil/genap saat day filter M2, warna hari saat all-days */}
-          {selectedSales.dayFilter?.isM2 ? (
+          {selectedSales.dayViewSalesMap ? (
+            /* Per-Hari legend: warna per sales */
+            <div className="absolute bottom-8 z-[500] flex flex-col gap-[4px] p-[8px] rounded-lg shadow-md"
+                 style={{left:leftHidden?'16px':'340px',background:'rgba(255,255,255,0.96)',border:'1px solid rgba(80,95,118,0.15)',maxWidth:200}}>
+              <span className="text-[8px] font-bold tracking-widest uppercase mb-[1px]" style={{color:'rgba(80,95,118,0.55)'}}>{selectedSales.salesName}</span>
+              {Object.entries(selectedSales.dayViewSalesMap).map(([sn,codes],idx)=>(
+                <div key={sn} className="flex items-center gap-[5px]">
+                  <div className="w-[8px] h-[8px] rounded-[2px] shrink-0" style={{background:TERRITORY_COLORS[idx%TERRITORY_COLORS.length]}}/>
+                  <span className="text-[9px] font-semibold flex-1 truncate" style={{color:'#45464d'}}>{salesLabel(sn)}</span>
+                  <span className="text-[9px] font-data-mono text-on-surface-variant">{codes.length}</span>
+                </div>
+              ))}
+            </div>
+          ) : selectedSales.dayFilter?.isM2 ? (
             <div className="absolute bottom-8 z-[500] flex flex-col gap-[5px] p-[8px] rounded-lg shadow-md"
                  style={{left:leftHidden?'16px':'340px',background:'rgba(255,255,255,0.96)',border:'1px solid rgba(80,95,118,0.15)'}}>
               <span className="text-[8px] font-bold tracking-widest uppercase mb-[1px]" style={{color:'rgba(80,95,118,0.55)'}}>Minggu</span>
@@ -1454,16 +1763,19 @@ export default function RoutingEnginePage() {
       {/* ── Panel KANAN ── */}
       {!rightHidden&&hasRightData&&(
         <SummaryPanel
+          key={areaId??'no-area'}
           divisions={divisions}
           divisionStates={divisionStates}
           omsetByCode={storeOmsetMap}
           selectedSales={selectedSales}
           anyRunning={anyRunning}
+          viewMode={summaryViewMode}
           onSelectSales={setSelectedSales}
           onRunStage2={runStage2}
           onSavePlan={savePlan}
           onNavigatePlans={()=>navigate('/plans')}
           onHide={()=>setRightHidden(true)}
+          onViewModeChange={setSummaryViewMode}
         />
       )}
     </div>

@@ -250,6 +250,59 @@ class RouteEngine:
 
         return SalesPartition(div_sls=div_sls, territories=territories)
 
+    def partition_days(
+        self,
+        stores:  Sequence[Store],
+        config:  PlanConfig,
+        div_sls: str,
+    ) -> SalesPartition:
+        """
+        TRAFFIC Stage 1 — partisi toko ke N hari (day-zones).
+        "Keroyokan": tiap hari semua sales pergi ke zone yang sama.
+
+        Hasilnya berupa SalesPartition di mana:
+          sales_index = day_index (0-based)
+          sales_name  = nama hari ("Senin", "Selasa", ...)
+
+        Dipakai oleh /stage1 saat philosophy=TRAFFIC untuk preview zone hari
+        di peta sebelum manajer melakukan adjustment.
+        """
+        seen: Dict[str, Store] = {}
+        for s in sorted(stores, key=lambda s: s.customer_code):
+            seen.setdefault(s.customer_code, s)
+        canon: List[Store] = list(seen.values())
+
+        if not canon:
+            return SalesPartition(div_sls=div_sls, territories=[])
+
+        # K-Means balanced partition ke work_days hari
+        day_labels = balanced_partition(
+            canon,
+            config.work_days,
+            criterion=config.balance_criterion,
+            random_state=config.random_state,
+            tolerance=config.balance_tolerance,
+        )
+
+        by_day: Dict[int, List[Store]] = defaultdict(list)
+        for s in canon:
+            by_day[day_labels[s.customer_code]].append(s)
+
+        territories: List[SalesTerritory] = []
+        for day_idx in sorted(by_day):
+            grp = by_day[day_idx]
+            ct  = centroid([s.coord for s in grp])
+            territories.append(SalesTerritory(
+                sales_index    = day_idx,
+                sales_name     = day_name(day_idx),   # "Senin", "Selasa", ...
+                store_count    = len(grp),
+                centroid_lat   = ct[0],
+                centroid_lon   = ct[1],
+                customer_codes = [s.customer_code for s in grp],
+            ))
+
+        return SalesPartition(div_sls=div_sls, territories=territories)
+
     def run(
         self,
         stores: Sequence[Store],

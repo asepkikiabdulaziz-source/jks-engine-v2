@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useArea } from '../context/AreaContext'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabase'
+import { exportPlanExcel } from '../lib/exportPlan'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -30,6 +31,11 @@ interface Plan {
   approved_at : string | null
 }
 
+interface DiscardConfirm {
+  id   : string
+  name : string
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -44,9 +50,9 @@ function fmtDate(iso: string | null): string {
 
 function StatusBadge({ status }: { status: Plan['status'] }) {
   const cfg = {
-    DRAFT:    { label: 'Draft',   color: '#45464d', bg: '#e0e3e5' },
-    APPROVED: { label: 'Aktif',   color: '#0c9488', bg: 'rgba(12,148,136,0.15)' },
-    ARCHIVED: { label: 'Arsip',   color: '#9099a8', bg: 'rgba(80,95,118,0.08)' },
+    DRAFT:    { label: 'Draft',       color: '#45464d', bg: '#e0e3e5' },
+    APPROVED: { label: 'Submitted',   color: '#0c9488', bg: 'rgba(12,148,136,0.15)' },
+    ARCHIVED: { label: 'Arsip',       color: '#9099a8', bg: 'rgba(80,95,118,0.08)' },
   }[status]
   return (
     <span className="text-[10px] font-bold px-sm py-[3px] rounded-full"
@@ -61,7 +67,7 @@ function StatusBadge({ status }: { status: Plan['status'] }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PlanCard({
-  plan, onApprove, onDiscard, approving, discarding, onViewMap,
+  plan, onApprove, onDiscard, approving, discarding, onViewMap, onExport, exporting,
 }: {
   plan      : Plan
   onApprove : (id: string) => void
@@ -69,6 +75,8 @@ function PlanCard({
   approving : boolean
   discarding: boolean
   onViewMap : (id: string) => void
+  onExport  : (id: string) => void
+  exporting : boolean
 }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -165,14 +173,26 @@ function PlanCard({
             </div>
           )}
 
-          {/* Lihat di Peta */}
-          <button
-            onClick={() => onViewMap(plan.id)}
-            className="w-full flex items-center justify-center gap-xs py-sm rounded-xl border font-label-md text-label-md text-sm transition-all hover:bg-surface-container-high"
-            style={{ borderColor: 'rgba(80,95,118,0.2)', color: '#45464d', background: '#f7f9fb' }}>
-            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>map</span>
-            Lihat di Peta
-          </button>
+          {/* Lihat di Peta + Export Excel */}
+          <div className="flex gap-sm">
+            <button
+              onClick={() => onViewMap(plan.id)}
+              className="flex-1 flex items-center justify-center gap-xs py-sm rounded-xl border font-label-md text-label-md text-sm transition-all hover:bg-surface-container-high"
+              style={{ borderColor: 'rgba(80,95,118,0.2)', color: '#45464d', background: '#f7f9fb' }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>map</span>
+              Lihat di Peta
+            </button>
+            <button
+              onClick={() => onExport(plan.id)}
+              disabled={exporting}
+              className="flex-1 flex items-center justify-center gap-xs py-sm rounded-xl border font-label-md text-label-md text-sm transition-all hover:bg-surface-container-high disabled:opacity-50"
+              style={{ borderColor: 'rgba(80,95,118,0.2)', color: '#45464d', background: '#f7f9fb' }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+                {exporting ? 'sync' : 'download'}
+              </span>
+              {exporting ? 'Mengunduh…' : 'Export Excel'}
+            </button>
+          </div>
 
           {/* Action buttons */}
           <div className="flex gap-sm">
@@ -184,9 +204,9 @@ function PlanCard({
                   className="flex-1 flex items-center justify-center gap-xs py-sm rounded-xl font-label-md text-label-md transition-all disabled:opacity-50 text-sm"
                   style={{ background: '#0c9488', color: '#fff' }}>
                   <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
-                    {approving ? 'sync' : 'check_circle'}
+                    {approving ? 'sync' : 'send'}
                   </span>
-                  {approving ? 'Mengaktifkan…' : 'Aktifkan Plan'}
+                  {approving ? 'Mengirim…' : 'Kirim ke Field'}
                 </button>
                 <button
                   onClick={() => onDiscard(plan.id)}
@@ -203,8 +223,8 @@ function PlanCard({
             {plan.status === 'APPROVED' && (
               <div className="flex items-center gap-xs px-sm py-xs rounded-lg text-[11px] font-semibold w-full"
                    style={{ background: 'rgba(12,148,136,0.08)', color: '#0c9488' }}>
-                <span className="material-symbols-outlined ms-fill" style={{ fontSize: 14 }}>verified</span>
-                Plan aktif — digunakan oleh field sales
+                <span className="material-symbols-outlined ms-fill" style={{ fontSize: 14 }}>send</span>
+                Plan telah dikirim ke field sales
               </div>
             )}
             {plan.status === 'ARCHIVED' && (
@@ -237,6 +257,8 @@ export default function PlansPage() {
   // Per-plan action loading state
   const [approvingId,  setApprovingId]  = useState<string | null>(null)
   const [discardingId, setDiscardingId] = useState<string | null>(null)
+  const [exportingId,  setExportingId]  = useState<string | null>(null)
+  const [discardConfirm, setDiscardConfirm] = useState<DiscardConfirm | null>(null)
 
   // ── Load plans ─────────────────────────────────────────────────────────────
   const loadPlans = useCallback(async () => {
@@ -257,19 +279,47 @@ export default function PlansPage() {
     setApprovingId(planId)
     const { error: err } = await supabase
       .rpc('approve_plan', { p_plan_id: planId, p_user_id: user.id })
-    if (err) alert(`Gagal mengaktifkan plan: ${err.message}`)
-    else await loadPlans()
+    if (err) {
+      alert(`Gagal mengirim plan: ${err.message}`)
+    } else {
+      // Auto-hapus semua DRAFT lain di area ini (tidak perlu user konfirmasi)
+      const otherDrafts = plans.filter(p => p.status === 'DRAFT' && p.id !== planId)
+      for (const draft of otherDrafts) {
+        await supabase.rpc('discard_plan', { p_plan_id: draft.id })
+      }
+      await loadPlans()
+    }
     setApprovingId(null)
   }
 
-  // ── Discard ────────────────────────────────────────────────────────────────
-  async function handleDiscard(planId: string) {
+  // ── Export ke Excel ────────────────────────────────────────────────────────
+  async function handleExport(planId: string) {
+    if (!activeArea) return
     const plan = plans.find(p => p.id === planId)
     if (!plan) return
-    if (!window.confirm(`Hapus draft "${plan.plan_name}"? Aksi ini tidak bisa dibatalkan.`)) return
-    setDiscardingId(planId)
+    setExportingId(planId)
+    try {
+      await exportPlanExcel(planId, plan, activeArea.id, activeArea.nama_area, activeArea.kd_dist, supabase)
+    } catch (e) {
+      alert(`Gagal export: ${(e as Error).message}`)
+    }
+    setExportingId(null)
+  }
+
+  // ── Discard (request konfirmasi dulu) ──────────────────────────────────────
+  function requestDiscard(planId: string) {
+    const plan = plans.find(p => p.id === planId)
+    if (!plan) return
+    setDiscardConfirm({ id: planId, name: plan.plan_name })
+  }
+
+  async function confirmDiscard() {
+    if (!discardConfirm) return
+    const { id } = discardConfirm
+    setDiscardConfirm(null)
+    setDiscardingId(id)
     const { error: err } = await supabase
-      .rpc('discard_plan', { p_plan_id: planId })
+      .rpc('discard_plan', { p_plan_id: id })
     if (err) alert(`Gagal menghapus draft: ${err.message}`)
     else await loadPlans()
     setDiscardingId(null)
@@ -347,7 +397,44 @@ export default function PlansPage() {
         </div>
       )}
 
-      {/* ── Plan Aktif ─────────────────────────────────────────────────────── */}
+      {/* ── Confirm discard dialog ─────────────────────────────────────────── */}
+      {discardConfirm && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center pb-xl px-md"
+             style={{ background: 'rgba(0,0,0,0.35)' }}
+             onClick={() => setDiscardConfirm(null)}>
+          <div className="w-full max-w-sm bg-surface-container-lowest rounded-2xl shadow-2xl p-lg flex flex-col gap-md"
+               style={{ border: '1px solid rgba(186,26,26,0.15)' }}
+               onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-sm">
+              <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+                   style={{ background: 'rgba(186,26,26,0.08)' }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 18, color: '#ba1a1a' }}>delete</span>
+              </div>
+              <div>
+                <p className="font-semibold text-sm text-on-surface">Hapus draft ini?</p>
+                <p className="text-[11px] text-on-surface-variant mt-[1px] font-data-mono">{discardConfirm.name}</p>
+              </div>
+            </div>
+            <p className="text-[11px] text-on-surface-variant">
+              Draft akan dihapus permanen. Aksi ini tidak bisa dibatalkan.
+            </p>
+            <div className="flex gap-sm">
+              <button onClick={() => setDiscardConfirm(null)}
+                      className="flex-1 py-sm rounded-xl border text-sm font-semibold transition-colors hover:bg-surface-container"
+                      style={{ borderColor: 'rgba(80,95,118,0.2)', color: '#45464d' }}>
+                Batal
+              </button>
+              <button onClick={confirmDiscard}
+                      className="flex-1 py-sm rounded-xl text-sm font-semibold transition-colors"
+                      style={{ background: '#ba1a1a', color: '#fff' }}>
+                Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Plan Submitted (Aktif) ─────────────────────────────────────────── */}
       {approvedPlan && (
         <section className="mb-lg">
           <p className="text-[9px] font-bold tracking-widest uppercase text-on-surface-variant mb-sm">
@@ -355,10 +442,12 @@ export default function PlansPage() {
           </p>
           <PlanCard
             plan={approvedPlan}
-            onApprove={handleApprove} onDiscard={handleDiscard}
+            onApprove={handleApprove} onDiscard={requestDiscard}
             approving={approvingId === approvedPlan.id}
             discarding={discardingId === approvedPlan.id}
             onViewMap={id => navigate(`/plans/${id}/map`)}
+            onExport={handleExport}
+            exporting={exportingId === approvedPlan.id}
           />
         </section>
       )}
@@ -372,9 +461,10 @@ export default function PlansPage() {
           <div className="flex flex-col gap-sm">
             {draftPlans.map(p => (
               <PlanCard key={p.id} plan={p}
-                onApprove={handleApprove} onDiscard={handleDiscard}
+                onApprove={handleApprove} onDiscard={requestDiscard}
                 approving={approvingId === p.id} discarding={discardingId === p.id}
                 onViewMap={id => navigate(`/plans/${id}/map`)}
+                onExport={handleExport} exporting={exportingId === p.id}
               />
             ))}
           </div>
@@ -390,9 +480,10 @@ export default function PlansPage() {
           <div className="flex flex-col gap-sm">
             {archivedPlans.map(p => (
               <PlanCard key={p.id} plan={p}
-                onApprove={handleApprove} onDiscard={handleDiscard}
+                onApprove={handleApprove} onDiscard={requestDiscard}
                 approving={false} discarding={false}
                 onViewMap={id => navigate(`/plans/${id}/map`)}
+                onExport={handleExport} exporting={exportingId === p.id}
               />
             ))}
           </div>

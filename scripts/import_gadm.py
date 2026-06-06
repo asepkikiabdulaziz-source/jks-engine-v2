@@ -3,11 +3,16 @@
 import_gadm.py — Import GADM Level 4 Indonesia ke Supabase
 Jalankan dari root project: D:\\PROJECT\\jks-v2\\
 
-    python scripts/import_gadm.py
+    python scripts/import_gadm.py [/path/to/gadm41_IDN_4.shp]
+
+Jika path SHP tidak diberikan, default ke: <project_root>/referensi/gadm41_IDN_shp/gadm41_IDN_4.shp
 
 Requirements:
     pip install geopandas supabase shapely
 Credentials dibaca dari .env.local (SUPABASE_SERVICE_ROLE_KEY).
+
+Catatan: Script ini one-time setup. Data GADM sudah ada di Supabase.
+Jalankan ulang hanya jika perlu reimport (perubahan simplifikasi, skema baru, dst).
 """
 
 import os
@@ -40,7 +45,9 @@ if not SUPABASE_URL or not SVC_KEY:
     sys.exit(1)
 
 # ── Config ─────────────────────────────────────────────────────
-SHP_PATH     = os.path.join(ROOT, 'referensi', 'gadm41_IDN_shp', 'gadm41_IDN_4.shp')
+# Path SHP bisa diberikan via argumen CLI atau env var GADM_SHP_PATH
+_default_shp = os.path.join(ROOT, 'referensi', 'gadm41_IDN_shp', 'gadm41_IDN_4.shp')
+SHP_PATH     = sys.argv[1] if len(sys.argv) > 1 else os.environ.get('GADM_SHP_PATH', _default_shp)
 BATCH_SIZE   = 200       # rows per RPC call — index di-drop sebelum import, jadi bisa lebih besar
 SIMPLIFY_TOL = 0.001     # 0.001° ≈ 111m — jauh lebih akurat dari 0.005°, celah ditutup KNN fallback
 

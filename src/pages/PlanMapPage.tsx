@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import type { Map as LeafletMap, LayerGroup } from 'leaflet'
 import { useArea } from '../context/AreaContext'
 import { supabase } from '../lib/supabase'
+import { exportPlanExcel } from '../lib/exportPlan'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -49,7 +50,8 @@ interface DivMeta {
 interface PlanInfo {
   id: string; plan_name: string
   status: 'DRAFT'|'APPROVED'|'ARCHIVED'
-  divisions: DivMeta[]; store_count: number; created_at: string
+  divisions: DivMeta[]; store_count: number
+  created_at: string; approved_at: string | null
 }
 interface Territory {
   sales_index: number; sales_name: string
@@ -88,9 +90,9 @@ function salesLabel(name:string):string { const p=name.split('-'); return `SLS $
 
 function StatusBadge({ status }:{ status:PlanInfo['status'] }) {
   const cfg = {
-    DRAFT:    { label:'Draft',  color:'#45464d', bg:'#e0e3e5' },
-    APPROVED: { label:'Aktif',  color:'#0c9488', bg:'rgba(12,148,136,0.15)' },
-    ARCHIVED: { label:'Arsip',  color:'#9099a8', bg:'rgba(80,95,118,0.08)' },
+    DRAFT:    { label:'Draft',      color:'#45464d', bg:'#e0e3e5' },
+    APPROVED: { label:'Submitted',  color:'#0c9488', bg:'rgba(12,148,136,0.15)' },
+    ARCHIVED: { label:'Arsip',      color:'#9099a8', bg:'rgba(80,95,118,0.08)' },
   }[status]
   return (
     <span className="text-[9px] font-bold px-[6px] py-[2px] rounded-full shrink-0"
@@ -352,9 +354,10 @@ export default function PlanMapPage() {
   const [divResults, setDivResults] = useState<Map<string,DivResult>>(new Map())
   const [loading,    setLoading]    = useState(true)
   const [error,      setError]      = useState<string|null>(null)
-  const [leftHidden, setLeftHidden] = useState(false)
-  const [rightHidden,setRightHidden]= useState(false)
+  const [leftHidden,  setLeftHidden]  = useState(false)
+  const [rightHidden, setRightHidden] = useState(false)
   const [selectedSales, setSelectedSales] = useState<SelectedSales|null>(null)
+  const [exporting,   setExporting]   = useState(false)
 
   // ── Load ──────────────────────────────────────────────────────────────────
   useEffect(()=>{
@@ -430,6 +433,22 @@ export default function PlanMapPage() {
 
     return ()=>{ cancelled=true }
   },[activeArea,planId])
+
+  // ── Export ke Excel ───────────────────────────────────────────────────────
+  async function handleExport() {
+    if (!activeArea || !planInfo || !planId) return
+    setExporting(true)
+    try {
+      await exportPlanExcel(
+        planId, planInfo,
+        activeArea.id, activeArea.nama_area, activeArea.kd_dist,
+        supabase,
+      )
+    } catch (e) {
+      alert(`Gagal export: ${(e as Error).message}`)
+    }
+    setExporting(false)
+  }
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const omsetByCode = useMemo(()=>{
@@ -670,7 +689,15 @@ export default function PlanMapPage() {
           </div>
 
           {/* Footer */}
-          <div className="shrink-0 px-sm py-sm" style={{borderTop:'1px solid rgba(80,95,118,0.1)'}}>
+          <div className="shrink-0 px-sm py-sm flex flex-col gap-[6px]" style={{borderTop:'1px solid rgba(80,95,118,0.1)'}}>
+            <button type="button" onClick={handleExport} disabled={exporting}
+                    className="w-full flex items-center justify-center gap-xs py-sm rounded-xl text-sm font-semibold border transition-colors disabled:opacity-50 hover:bg-surface-container"
+                    style={{borderColor:'rgba(80,95,118,0.2)',color:'#45464d',background:'#f7f9fb'}}>
+              <span className="material-symbols-outlined" style={{fontSize:15}}>
+                {exporting?'sync':'download'}
+              </span>
+              {exporting?'Mengunduh…':'Export Excel'}
+            </button>
             <button type="button" onClick={()=>navigate('/routing')}
                     className="w-full flex items-center justify-center gap-xs py-sm rounded-xl text-sm font-semibold transition-colors hover:bg-primary/90"
                     style={{background:'#0c9488',color:'#fff'}}>

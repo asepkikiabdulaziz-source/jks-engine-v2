@@ -22,7 +22,7 @@ from typing import Dict, List, Sequence, Tuple
 
 from .geo import bearing, centroid
 from .partition import balanced_partition
-from ..models import PlanConfig, BalanceCriterion, TrafficCenter
+from ..models import PlanConfig, BalanceCriterion
 
 Coord = Tuple[float, float]
 
@@ -115,18 +115,21 @@ def build_traffic(
     config: PlanConfig,
 ) -> Dict[str, Tuple[int, int]]:
     """
-    Day-first pipeline.
+    Day-first pipeline. "Keroyokan" — semua sales ke zone hari yang sama.
     Return: {customer_code -> (sales_index, day_index0)}.
 
-    1. Iris work_days hari GLOBAL (dari depo, atau centroid global).
-    2. Per hari: partisi N sales balanced.
+    1. K-Means balanced partition ke work_days hari (kompak secara spasial).
+       Pengganti slice_by_bearing — lebih natural, mengikuti gumpalan toko.
+    2. Per hari: K-Means balanced partition ke n_sales.
     """
-    if config.traffic_center == TrafficCenter.GLOBAL_CENTROID:
-        center_global = centroid([s.coord for s in stores])
-    else:  # DEPO (default)
-        center_global = (config.depo_lat, config.depo_lon)
-
-    day_labels = slice_by_bearing(stores, center_global, config.work_days)
+    # Stage 1: partisi ke work_days hari (K-Means, balanced, deterministik)
+    day_labels = balanced_partition(
+        stores,
+        config.work_days,
+        criterion=config.balance_criterion,
+        random_state=config.random_state,
+        tolerance=config.balance_tolerance,
+    )
 
     by_day: Dict[int, List] = defaultdict(list)
     for s in stores:
@@ -134,6 +137,7 @@ def build_traffic(
 
     out: Dict[str, Tuple[int, int]] = {}
     for day_idx, day_stores in by_day.items():
+        # Stage 2: partisi ke n_sales per hari
         sales_labels = balanced_partition(
             day_stores,
             config.n_sales,
