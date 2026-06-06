@@ -1491,7 +1491,7 @@ export default function RoutingEnginePage() {
     setStoresLoading(true)
     supabase.rpc('get_stores_by_area',{p_area_id:areaId}).then(({data})=>{
       if (!cancelled) { setStores((data as StorePoint[])??[]); setStoresLoading(false) }
-    }).catch(()=>{ if (!cancelled) setStoresLoading(false) })
+    }, ()=>{ if (!cancelled) setStoresLoading(false) })
     return ()=>{ cancelled=true }
   },[areaId])
 
@@ -1613,8 +1613,8 @@ export default function RoutingEnginePage() {
     try {
       const {data:{session},error:se}=await supabase.auth.getSession()
       if(se||!session) throw new Error('Sesi expired')
-      const eu=import.meta.env.VITE_ENGINE_URL as string|undefined
-      if(!eu) throw new Error('VITE_ENGINE_URL belum dikonfigurasi')
+      // engine same-origin bila VITE_ENGINE_URL kosong (deploy 1-container); set saat dev
+      const eu=((import.meta.env.VITE_ENGINE_URL as string|undefined)??'').replace(/\/$/,'')
       const resp=await fetch(`${eu}/stage1`,{method:'POST',
         headers:{'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`},
         body:JSON.stringify({area_id:activeArea.id,kd_dist:activeArea.kd_dist,depo_lat:Number(activeArea.lat),depo_lon:Number(activeArea.lon),
@@ -1643,8 +1643,8 @@ export default function RoutingEnginePage() {
     try {
       const {data:{session},error:se}=await supabase.auth.getSession()
       if(se||!session) throw new Error('Sesi expired')
-      const eu=import.meta.env.VITE_ENGINE_URL as string|undefined
-      if(!eu) throw new Error('VITE_ENGINE_URL belum dikonfigurasi')
+      // engine same-origin bila VITE_ENGINE_URL kosong (deploy 1-container); set saat dev
+      const eu=((import.meta.env.VITE_ENGINE_URL as string|undefined)??'').replace(/\/$/,'')
       const div=divisions.find(d=>d.id===divId)
       if(!div) throw new Error('Divisi tidak ditemukan')
       // Kirim territories yang mungkin sudah diedit user (Tahap 2)
@@ -1681,8 +1681,8 @@ export default function RoutingEnginePage() {
     try {
       const {data:{session},error:se}=await supabase.auth.getSession()
       if(se||!session) throw new Error('Sesi expired')
-      const eu=import.meta.env.VITE_ENGINE_URL as string|undefined
-      if(!eu) throw new Error('VITE_ENGINE_URL belum dikonfigurasi')
+      // engine same-origin bila VITE_ENGINE_URL kosong (deploy 1-container); set saat dev
+      const eu=((import.meta.env.VITE_ENGINE_URL as string|undefined)??'').replace(/\/$/,'')
       const resp=await fetch(`${eu}/generate-plan`,{method:'POST',
         headers:{'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`},
         body:JSON.stringify({area_id:activeArea.id,kd_dist:activeArea.kd_dist,depo_lat:Number(activeArea.lat),depo_lon:Number(activeArea.lon),dry_run:false,

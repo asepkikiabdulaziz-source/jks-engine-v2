@@ -1,0 +1,44 @@
+# ── Build-context hygiene untuk `docker build` (context = ROOT) ────────────────
+# Tujuan utama: cegah project REFERENSI (punya .env asli + node_modules-nya) dan
+# artefak besar/rahasia ikut terkirim ke Docker daemon atau masuk image.
+
+# Project referensi (punya .env asli) — WAJIB dikecualikan.
+referensi/
+
+# Node deps & build output (di-rebuild di dalam image).
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+
+# Python cache / venv.
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+**/.pytest_cache/
+.venv/
+venv/
+
+# Secrets / environment — JANGAN pernah masuk image.
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+
+# VCS / IDE / OS / tooling.
+.git/
+.gitignore
+.gitattributes
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Data besar non-runtime.
+gadm41_IDN_shp/
+**/gadm41_IDN_shp/
+*.xlsx
+**/*.xlsx

@@ -173,14 +173,3 @@ function ScrollPage({ children }: { children: React.ReactNode }) {
   return <div className="h-full overflow-y-auto">{children}</div>
 }
 
-function Placeholder({ title }: { title: string }) {
-  return (
-    <div className="flex items-center justify-center h-full text-[#45464d]">
-      <div className="text-center space-y-2">
-        <span className="material-symbols-outlined text-5xl block" style={{ color: '#c6c6cd' }}>construction</span>
-        <p className="font-semibold">{title}</p>
-        <p className="text-sm">Coming next session</p>
-      </div>
-    </div>
-  )
-}

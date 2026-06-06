@@ -763,3 +763,38 @@ def stage1(
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "version": "2.0.0"}
+
+
+# ── Static frontend (SPA) — deploy 1-container ────────────────────────────────
+# api.py = transport layer (bukan logic engine), jadi aman menyajikan file statis.
+# Bila folder dist/ ADA (hasil `vite build`, di-COPY ke image oleh Dockerfile root),
+# FastAPI menyajikannya pada origin yang sama → tanpa CORS, tanpa mixed-content.
+# Bila dist/ TIDAK ada (mode dev / image engine-only), blok ini di-skip → API-only.
+# PENTING: didaftarkan PALING AKHIR agar route API (+ /docs, /openapi.json) menang.
+_DIST_DIR = os.path.normpath(
+    os.getenv("FRONTEND_DIST", os.path.join(os.path.dirname(__file__), "dist"))
+)
+
+if os.path.isdir(_DIST_DIR):
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    _assets_dir = os.path.join(_DIST_DIR, "assets")
+    if os.path.isdir(_assets_dir):
+        app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
+
+    _index_html = os.path.join(_DIST_DIR, "index.html")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str) -> "FileResponse":
+        # File statis nyata (favicon.ico, vite.svg, dst.) → sajikan apa adanya.
+        candidate = os.path.normpath(os.path.join(_DIST_DIR, full_path))
+        in_dist = candidate == _DIST_DIR or candidate.startswith(_DIST_DIR + os.sep)
+        if in_dist and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        # Route SPA (mis. /routing, /plans/..) → index.html; biar router FE yang urus.
+        return FileResponse(_index_html)
+
+    logger.info("Frontend statis dilayani dari %s (deploy 1-container)", _DIST_DIR)
+else:
+    logger.info("dist/ tidak ditemukan — mode API-only (frontend dilayani terpisah)")
