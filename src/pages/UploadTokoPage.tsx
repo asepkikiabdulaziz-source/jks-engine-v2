@@ -539,12 +539,16 @@ export default function UploadTokoPage() {
                   </div>
 
                   {/* Stats */}
-                  <div className="grid grid-cols-3 gap-md">
-                    <StatCard label="Total Toko" value={stagingResult.total} />
-                    <StatCard label="Ter-geocode" value={stagingResult.geocoded} accent />
-                    <StatCard label="Tidak Ditemukan" value={stagingResult.not_found.length}
-                              error={stagingResult.not_found.length > 0} />
-                  </div>
+                  {(() => {
+                    const notFoundLen = (stagingResult.not_found ?? []).length
+                    return (
+                      <div className="grid grid-cols-3 gap-md">
+                        <StatCard label="Total Toko" value={stagingResult.total} />
+                        <StatCard label="Ter-geocode" value={stagingResult.geocoded} accent />
+                        <StatCard label="Tidak Ditemukan" value={notFoundLen} error={notFoundLen > 0} />
+                      </div>
+                    )
+                  })()}
 
                   {/* Baris di-skip saat parsing (tetap terlihat di langkah keputusan) */}
                   {parseResult && parseResult.errors.length > 0 && (
@@ -566,6 +570,11 @@ export default function UploadTokoPage() {
                         )}
                       </div>
                     </div>
+                  )}
+
+                  {/* Distribusi kecamatan — selalu tampil jika ada data geocoded */}
+                  {(stagingResult.summary ?? []).length > 0 && (
+                    <GeocodeSummary summary={stagingResult.summary} geocoded={stagingResult.geocoded} />
                   )}
 
                   {/* Review tabs: Tidak Masuk GADM + Koordinat Mencurigakan */}
@@ -708,6 +717,63 @@ export default function UploadTokoPage() {
 }
 
 // --- Sub-components ---
+
+function GeocodeSummary({ summary, geocoded }: { summary: KecamatanSummaryRow[]; geocoded: number }) {
+  const SHOW = 8
+  const shown  = summary.slice(0, SHOW)
+  const hidden = summary.length - SHOW
+  const uniqueKota = [...new Set(summary.map(r => r.name_2).filter(Boolean))].length
+
+  return (
+    <div className="rounded-lg border overflow-hidden" style={{ borderColor: 'rgba(80,95,118,0.15)' }}>
+      {/* Header */}
+      <div className="flex items-center gap-sm px-md py-sm"
+           style={{ background: '#f2f4f6', borderBottom: '1px solid rgba(80,95,118,0.1)' }}>
+        <span className="material-symbols-outlined" style={{ fontSize: 14, color: '#0c9488' }}>map</span>
+        <p className="text-xs font-semibold text-on-surface-variant flex-1">
+          Distribusi Geocoding
+        </p>
+        <span className="text-[11px] text-on-surface-variant">
+          {geocoded} toko · {summary.length} kecamatan · {uniqueKota} kab/kota
+        </span>
+      </div>
+
+      {/* Tabel distribusi */}
+      <div className="max-h-52 overflow-y-auto">
+        <table className="w-full text-xs">
+          <thead style={{ background: '#f7f9fb', position: 'sticky', top: 0 }}>
+            <tr>
+              <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant w-8">#</th>
+              <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kecamatan</th>
+              <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kab / Kota</th>
+              <th className="px-3 py-1.5 text-right font-label-md text-label-md text-on-surface-variant">Toko</th>
+              <th className="px-3 py-1.5 text-right font-label-md text-label-md text-on-surface-variant">%</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((r, i) => (
+              <tr key={i} className="border-t border-secondary/10 hover:bg-surface-container-low transition-colors">
+                <td className="px-3 py-1 text-on-surface-variant font-data-mono text-data-mono">{i + 1}</td>
+                <td className="px-3 py-1 font-body-sm text-body-sm text-primary">{r.name_3 || '—'}</td>
+                <td className="px-3 py-1 font-body-sm text-body-sm text-on-surface-variant">{r.name_2 || '—'}</td>
+                <td className="px-3 py-1 text-right font-data-mono text-data-mono">{r.jumlah}</td>
+                <td className="px-3 py-1 text-right font-data-mono text-data-mono text-on-surface-variant">{r.pct}%</td>
+              </tr>
+            ))}
+            {hidden > 0 && (
+              <tr className="border-t border-secondary/10">
+                <td colSpan={5} className="px-3 py-1.5 text-center text-[11px] text-on-surface-variant italic">
+                  ... dan {hidden} kecamatan lainnya
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 function StatCard({ label, value, accent, error }: { label: string; value: number; accent?: boolean; error?: boolean }) {
   return (
     <div className="rounded-lg p-md border text-center"
