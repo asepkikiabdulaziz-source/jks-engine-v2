@@ -137,6 +137,42 @@ function parseExcel(file: File): Promise<ParseResult> {
   })
 }
 
+function downloadNotFound(
+  notFound: Array<{ customer_code: string; customer_name: string; lat: number; lon: number }>,
+  sourceFileName: string,
+) {
+  const headers = [
+    'customer_code', 'customer_name', 'latitude', 'longitude', 'catatan',
+  ]
+  const rows = notFound.map(nf => [
+    nf.customer_code,
+    nf.customer_name,
+    nf.lat,
+    nf.lon,
+    'Koordinat tidak cocok wilayah GADM — periksa & koreksi lat/lon',
+  ])
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+  ws['!cols'] = [{ wch: 16 }, { wch: 36 }, { wch: 12 }, { wch: 12 }, { wch: 52 }]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Tidak Ditemukan GADM')
+  const base = sourceFileName.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_')
+  XLSX.writeFile(wb, `${base}_not_found_gadm.xlsx`)
+}
+
+function downloadKecamatanSummary(
+  summary: KecamatanSummaryRow[],
+  sourceFileName: string,
+) {
+  const headers = ['Provinsi', 'Kab/Kota', 'Kecamatan', 'Jumlah Toko', '%']
+  const rows = summary.map(r => [r.name_1, r.name_2, r.name_3, r.jumlah, r.pct])
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+  ws['!cols'] = [{ wch: 22 }, { wch: 24 }, { wch: 24 }, { wch: 14 }, { wch: 8 }]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Distribusi Kecamatan')
+  const base = sourceFileName.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_')
+  XLSX.writeFile(wb, `${base}_kecamatan.xlsx`)
+}
+
 function downloadTemplate() {
   const ws = XLSX.utils.aoa_to_sheet([
     ['customer_code', 'customer_name', 'latitude', 'longitude', 'div_sls', 'type', 'omset'],
@@ -520,7 +556,11 @@ export default function UploadTokoPage() {
 
                   {/* Kecamatan distribution */}
                   {stagingResult.summary.length > 0 && (
-                    <StagingKecamatanSummary summary={stagingResult.summary} total={stagingResult.geocoded} />
+                    <StagingKecamatanSummary
+                      summary={stagingResult.summary}
+                      total={stagingResult.geocoded}
+                      fileName={fileName}
+                    />
                   )}
 
                   {/* Not found list */}
@@ -533,11 +573,20 @@ export default function UploadTokoPage() {
                         <p className="font-label-md text-label-md text-error flex-1 uppercase tracking-wide">
                           {stagingResult.not_found.length} Toko Tidak Cocok GADM
                         </p>
-                        <p className="font-body-sm text-body-sm text-on-surface-variant">
-                          Kolom gadm_* akan kosong
-                        </p>
+                        <span className="font-body-sm text-body-sm text-on-surface-variant mr-sm">
+                          gadm_* akan kosong
+                        </span>
+                        <button
+                          onClick={() => downloadNotFound(stagingResult.not_found, fileName)}
+                          className="flex items-center gap-[4px] px-sm py-[3px] rounded-lg text-[11px] font-semibold border transition-colors hover:bg-error/5"
+                          style={{ borderColor: 'rgba(186,26,26,0.3)', color: '#ba1a1a', background: 'rgba(255,255,255,0.8)' }}
+                          title="Download daftar toko yang tidak cocok GADM sebagai Excel"
+                        >
+                          <span className="material-symbols-outlined" style={{ fontSize: 13 }}>download</span>
+                          Download
+                        </button>
                       </div>
-                      <div className="max-h-36 overflow-y-auto">
+                      <div className="max-h-48 overflow-y-auto">
                         <table className="w-full text-xs">
                           <thead style={{ background: '#f2f4f6', position: 'sticky', top: 0 }}>
                             <tr>
@@ -551,7 +600,7 @@ export default function UploadTokoPage() {
                             {stagingResult.not_found.map((nf, i) => (
                               <tr key={i} className="border-t border-secondary/10">
                                 <td className="px-3 py-1 font-data-mono text-data-mono">{nf.customer_code}</td>
-                                <td className="px-3 py-1 font-body-sm text-body-sm max-w-[160px] truncate">{nf.customer_name}</td>
+                                <td className="px-3 py-1 font-body-sm text-body-sm max-w-[160px] truncate" title={nf.customer_name}>{nf.customer_name}</td>
                                 <td className="px-3 py-1 font-data-mono text-data-mono text-on-surface-variant">{nf.lat.toFixed(5)}</td>
                                 <td className="px-3 py-1 font-data-mono text-data-mono text-on-surface-variant">{nf.lon.toFixed(5)}</td>
                               </tr>
@@ -712,10 +761,11 @@ function StatCard({ label, value, accent, error }: { label: string; value: numbe
 }
 
 function StagingKecamatanSummary({
-  summary, total,
+  summary, total, fileName,
 }: {
-  summary: KecamatanSummaryRow[]
-  total: number
+  summary   : KecamatanSummaryRow[]
+  total     : number
+  fileName  : string
 }) {
   return (
     <div className="rounded-lg border border-secondary/10 overflow-hidden" style={{ background: '#f7f9fb' }}>
@@ -724,7 +774,16 @@ function StagingKecamatanSummary({
         <p className="font-label-md text-label-md text-on-surface-variant uppercase tracking-wide flex-1">
           Distribusi per Kecamatan
         </p>
-        <span className="font-label-md text-label-md text-on-surface-variant">{total} ter-geocode</span>
+        <span className="font-label-md text-label-md text-on-surface-variant mr-sm">{total} ter-geocode</span>
+        <button
+          onClick={() => downloadKecamatanSummary(summary, fileName)}
+          className="flex items-center gap-[4px] px-sm py-[3px] rounded-lg text-[11px] font-semibold border transition-colors hover:bg-surface-container"
+          style={{ borderColor: 'rgba(80,95,118,0.2)', color: '#45464d', background: 'rgba(255,255,255,0.8)' }}
+          title="Download distribusi kecamatan sebagai Excel"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 13 }}>download</span>
+          Download
+        </button>
       </div>
       <div className="overflow-x-auto max-h-56 overflow-y-auto">
         <table className="w-full text-xs">
