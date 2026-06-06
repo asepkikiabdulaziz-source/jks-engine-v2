@@ -34,12 +34,22 @@ interface KecamatanSummaryRow {
   pct: number
 }
 
+interface AnomalStore {
+  customer_code: string
+  customer_name: string
+  lat           : number
+  lon           : number
+  kecamatan     : string
+  kota          : string
+}
+
 interface StagingResult {
   staging_session_id: string
-  total: number
-  geocoded: number
-  not_found: Array<{ customer_code: string; customer_name: string; lat: number; lon: number }>
-  summary: KecamatanSummaryRow[]
+  total         : number
+  geocoded      : number
+  not_found     : Array<{ customer_code: string; customer_name: string; lat: number; lon: number }>
+  anomali_stores: AnomalStore[]
+  summary       : KecamatanSummaryRow[]
 }
 
 interface CommitResult {
@@ -159,24 +169,22 @@ function downloadNotFound(
   XLSX.writeFile(wb, `${base}_not_found_gadm.xlsx`)
 }
 
-// Hanya export baris yang mencurigakan (jumlah ≤ 2) — bukan semua distribusi
-function downloadKecamatanAnomali(
-  summary: KecamatanSummaryRow[],
-  sourceFileName: string,
-) {
-  const anomali = summary.filter(r => r.jumlah <= 2)
-  if (anomali.length === 0) return
-  const headers = ['Provinsi', 'Kab/Kota', 'Kecamatan', 'Jumlah Toko', '%', 'Catatan']
-  const rows = anomali.map(r => [
-    r.name_1, r.name_2, r.name_3, r.jumlah, r.pct,
-    'Terlalu sedikit toko — periksa apakah kecamatan sudah benar',
+// Toko dengan koordinat mencurigakan (ter-geocode ke kecamatan ≤ 2 toko)
+function downloadAnomalStores(stores: AnomalStore[], sourceFileName: string) {
+  if (stores.length === 0) return
+  const headers = ['customer_code', 'customer_name', 'kecamatan_gadm', 'kota_gadm', 'latitude', 'longitude', 'catatan']
+  const rows = stores.map(s => [
+    s.customer_code, s.customer_name,
+    s.kecamatan, s.kota,
+    s.lat, s.lon,
+    'Ter-geocode ke kecamatan dengan terlalu sedikit toko — periksa & koreksi lat/lon',
   ])
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
-  ws['!cols'] = [{ wch: 22 }, { wch: 24 }, { wch: 24 }, { wch: 12 }, { wch: 6 }, { wch: 50 }]
+  ws['!cols'] = [{ wch: 16 }, { wch: 36 }, { wch: 24 }, { wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 56 }]
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Perlu Cek')
+  XLSX.utils.book_append_sheet(wb, ws, 'Koordinat Mencurigakan')
   const base = sourceFileName.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_')
-  XLSX.writeFile(wb, `${base}_perlu_cek.xlsx`)
+  XLSX.writeFile(wb, `${base}_koordinat_mencurigakan.xlsx`)
 }
 
 function downloadTemplate() {
@@ -560,10 +568,10 @@ export default function UploadTokoPage() {
                     </div>
                   )}
 
-                  {/* Review tabs: Not Found GADM + Kecamatan Mencurigakan */}
+                  {/* Review tabs: Tidak Masuk GADM + Koordinat Mencurigakan */}
                   <ReviewPanel
                     notFound={stagingResult.not_found}
-                    summary={stagingResult.summary}
+                    anomaliStores={stagingResult.anomali_stores}
                     fileName={fileName}
                   />
 
@@ -717,15 +725,14 @@ function StatCard({ label, value, accent, error }: { label: string; value: numbe
 }
 
 function ReviewPanel({
-  notFound, summary, fileName,
+  notFound, anomaliStores, fileName,
 }: {
-  notFound : StagingResult['not_found']
-  summary  : KecamatanSummaryRow[]
-  fileName : string
+  notFound     : StagingResult['not_found']
+  anomaliStores: AnomalStore[]
+  fileName     : string
 }) {
-  const anomali     = summary.filter(r => r.jumlah <= 2)
   const hasNotFound = notFound.length > 0
-  const hasAnomali  = anomali.length > 0
+  const hasAnomali  = anomaliStores.length > 0
 
   // Default ke tab pertama yang punya isu
   const [tab, setTab] = React.useState<'not_found' | 'anomali'>(
@@ -750,7 +757,7 @@ function ReviewPanel({
             }}
           >
             <span className="material-symbols-outlined" style={{ fontSize: 13 }}>location_off</span>
-            Tidak Ditemukan GADM
+            Tidak Masuk GADM
             <span className="ml-[3px] px-[5px] py-[1px] rounded-full text-[10px] font-bold"
                   style={{ background: 'rgba(186,26,26,0.15)', color: '#ba1a1a' }}>
               {notFound.length}
@@ -767,22 +774,22 @@ function ReviewPanel({
             }}
           >
             <span className="material-symbols-outlined" style={{ fontSize: 13 }}>warning</span>
-            Kecamatan Mencurigakan
+            Koordinat Mencurigakan
             <span className="ml-[3px] px-[5px] py-[1px] rounded-full text-[10px] font-bold"
                   style={{ background: 'rgba(186,26,26,0.15)', color: '#ba1a1a' }}>
-              {anomali.length}
+              {anomaliStores.length}
             </span>
           </button>
         )}
       </div>
 
-      {/* ── Konten Tab 1: Tidak Ditemukan GADM ── */}
+      {/* ── Konten Tab 1: Tidak Masuk GADM ── */}
       {tab === 'not_found' && hasNotFound && (
         <>
           <div className="flex items-center gap-sm px-md py-xs"
                style={{ background: 'rgba(255,218,214,0.12)', borderBottom: '1px solid rgba(186,26,26,0.08)' }}>
             <p className="text-[11px] text-on-surface-variant flex-1">
-              Kolom gadm_* akan kosong — periksa & koreksi koordinat toko ini
+              Koordinat di luar semua polygon GADM — kolom gadm_* kosong, pasti perlu koreksi
             </p>
             <button
               onClick={() => downloadNotFound(notFound, fileName)}
@@ -819,16 +826,16 @@ function ReviewPanel({
         </>
       )}
 
-      {/* ── Konten Tab 2: Kecamatan Mencurigakan ── */}
+      {/* ── Konten Tab 2: Koordinat Mencurigakan ── */}
       {tab === 'anomali' && hasAnomali && (
         <>
           <div className="flex items-center gap-sm px-md py-xs"
                style={{ background: 'rgba(255,218,214,0.12)', borderBottom: '1px solid rgba(186,26,26,0.08)' }}>
             <p className="text-[11px] text-on-surface-variant flex-1">
-              Kecamatan dengan ≤ 2 toko — kemungkinan koordinat salah kecamatan
+              Masuk GADM tapi di kecamatan ≤ 2 toko — kemungkinan koordinat meleset ke kecamatan yang salah
             </p>
             <button
-              onClick={() => downloadKecamatanAnomali(summary, fileName)}
+              onClick={() => downloadAnomalStores(anomaliStores, fileName)}
               className="flex items-center gap-[4px] px-sm py-[3px] rounded text-[11px] font-semibold border transition-colors hover:bg-error/5"
               style={{ borderColor: 'rgba(186,26,26,0.3)', color: '#ba1a1a', background: 'rgba(255,255,255,0.85)' }}
             >
@@ -840,23 +847,26 @@ function ReviewPanel({
             <table className="w-full text-xs">
               <thead style={{ background: '#f7f9fb', position: 'sticky', top: 0 }}>
                 <tr>
-                  <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Provinsi</th>
+                  <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kode</th>
+                  <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Nama</th>
+                  <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kecamatan (GADM)</th>
                   <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kab/Kota</th>
-                  <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kecamatan</th>
-                  <th className="px-3 py-1.5 text-right font-label-md text-label-md text-on-surface-variant">Toko</th>
-                  <th className="px-3 py-1.5 text-right font-label-md text-label-md text-on-surface-variant">%</th>
+                  <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Lat</th>
+                  <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Lon</th>
                 </tr>
               </thead>
               <tbody>
-                {anomali.map((row, i) => (
+                {anomaliStores.map((s, i) => (
                   <tr key={i} className="border-t border-secondary/10"
-                      style={{ background: 'rgba(255,218,214,0.25)' }}>
-                    <td className="px-3 py-1.5 font-body-sm text-body-sm text-on-surface-variant">{row.name_1}</td>
-                    <td className="px-3 py-1.5 font-body-sm text-body-sm">{row.name_2}</td>
-                    <td className="px-3 py-1.5 font-body-sm text-body-sm font-semibold">{row.name_3}</td>
-                    <td className="px-3 py-1.5 font-data-mono text-data-mono text-right font-bold"
-                        style={{ color: '#ba1a1a' }}>{row.jumlah}</td>
-                    <td className="px-3 py-1.5 font-data-mono text-data-mono text-right text-on-surface-variant">{row.pct}%</td>
+                      style={{ background: 'rgba(255,218,214,0.2)' }}>
+                    <td className="px-3 py-1 font-data-mono text-data-mono">{s.customer_code}</td>
+                    <td className="px-3 py-1 font-body-sm text-body-sm max-w-[140px] truncate"
+                        title={s.customer_name}>{s.customer_name}</td>
+                    <td className="px-3 py-1 font-body-sm text-body-sm font-semibold"
+                        style={{ color: '#ba1a1a' }}>{s.kecamatan}</td>
+                    <td className="px-3 py-1 font-body-sm text-body-sm text-on-surface-variant">{s.kota}</td>
+                    <td className="px-3 py-1 font-data-mono text-data-mono text-on-surface-variant">{s.lat.toFixed(5)}</td>
+                    <td className="px-3 py-1 font-data-mono text-data-mono text-on-surface-variant">{s.lon.toFixed(5)}</td>
                   </tr>
                 ))}
               </tbody>
