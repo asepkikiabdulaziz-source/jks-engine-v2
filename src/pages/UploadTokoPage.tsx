@@ -159,18 +159,24 @@ function downloadNotFound(
   XLSX.writeFile(wb, `${base}_not_found_gadm.xlsx`)
 }
 
-function downloadKecamatanSummary(
+// Hanya export baris yang mencurigakan (jumlah ≤ 2) — bukan semua distribusi
+function downloadKecamatanAnomali(
   summary: KecamatanSummaryRow[],
   sourceFileName: string,
 ) {
-  const headers = ['Provinsi', 'Kab/Kota', 'Kecamatan', 'Jumlah Toko', '%']
-  const rows = summary.map(r => [r.name_1, r.name_2, r.name_3, r.jumlah, r.pct])
+  const anomali = summary.filter(r => r.jumlah <= 2)
+  if (anomali.length === 0) return
+  const headers = ['Provinsi', 'Kab/Kota', 'Kecamatan', 'Jumlah Toko', '%', 'Catatan']
+  const rows = anomali.map(r => [
+    r.name_1, r.name_2, r.name_3, r.jumlah, r.pct,
+    'Terlalu sedikit toko — periksa apakah kecamatan sudah benar',
+  ])
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
-  ws['!cols'] = [{ wch: 22 }, { wch: 24 }, { wch: 24 }, { wch: 14 }, { wch: 8 }]
+  ws['!cols'] = [{ wch: 22 }, { wch: 24 }, { wch: 24 }, { wch: 12 }, { wch: 6 }, { wch: 50 }]
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Distribusi Kecamatan')
+  XLSX.utils.book_append_sheet(wb, ws, 'Perlu Cek')
   const base = sourceFileName.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_')
-  XLSX.writeFile(wb, `${base}_kecamatan.xlsx`)
+  XLSX.writeFile(wb, `${base}_perlu_cek.xlsx`)
 }
 
 function downloadTemplate() {
@@ -775,15 +781,17 @@ function StagingKecamatanSummary({
           Distribusi per Kecamatan
         </p>
         <span className="font-label-md text-label-md text-on-surface-variant mr-sm">{total} ter-geocode</span>
-        <button
-          onClick={() => downloadKecamatanSummary(summary, fileName)}
-          className="flex items-center gap-[4px] px-sm py-[3px] rounded-lg text-[11px] font-semibold border transition-colors hover:bg-surface-container"
-          style={{ borderColor: 'rgba(80,95,118,0.2)', color: '#45464d', background: 'rgba(255,255,255,0.8)' }}
-          title="Download distribusi kecamatan sebagai Excel"
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: 13 }}>download</span>
-          Download
-        </button>
+        {summary.filter(r => r.jumlah <= 2).length > 0 && (
+          <button
+            onClick={() => downloadKecamatanAnomali(summary, fileName)}
+            className="flex items-center gap-[4px] px-sm py-[3px] rounded-lg text-[11px] font-semibold border transition-colors hover:bg-error/5"
+            style={{ borderColor: 'rgba(186,26,26,0.3)', color: '#ba1a1a', background: 'rgba(255,255,255,0.8)' }}
+            title="Download kecamatan yang perlu dicek (jumlah toko ≤ 2)"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 13 }}>download</span>
+            Download Perlu Cek ({summary.filter(r => r.jumlah <= 2).length})
+          </button>
+        )}
       </div>
       <div className="overflow-x-auto max-h-56 overflow-y-auto">
         <table className="w-full text-xs">
