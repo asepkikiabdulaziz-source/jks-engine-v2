@@ -20,6 +20,8 @@ interface StoreRow {
   latitude      : number | null
   longitude     : number | null
   omset         : number | null
+  gadm_kecamatan: string | null
+  gadm_kelurahan: string | null
 }
 
 interface AssignmentRow {
@@ -146,38 +148,37 @@ export async function exportPlanExcel(
 
     const headers = [
       'No', 'Kode Toko', 'Nama Toko', 'Sales', 'Hari', 'No. Urut',
-      ...(isM2 ? ['M2C13 (Ganjil)', 'M2C24 (Genap)'] : []),
-      'Omset', 'Lat', 'Lon', 'QC Flag',
+      'pekan', 'Omset', 'Lat', 'Lon', 'kecamatan', 'kelurahan',
     ]
 
     const dataRows = sorted.map((a, idx) => {
       const store = storeMap.get(a.customer_code)
-      const row: (string | number | null)[] = [
+      // Kolom "pekan": M2 → C13/C24 (atau Setiap minggu bila keduanya), M1 → Mingguan
+      const pekan = isM2
+        ? (a.visit_ganjil && a.visit_genap ? 'Setiap minggu'
+           : a.visit_ganjil ? 'M2C13 (Ganjil)'
+           : a.visit_genap  ? 'M2C24 (Genap)' : '—')
+        : 'Mingguan'
+      return [
         idx + 1,
         a.customer_code,
         store?.customer_name ?? '',
         salesLabel(a.sales_person_name),
         a.day_of_week,
         a.visit_order,
+        pekan,
+        store?.omset         != null ? store.omset     : '',
+        store?.latitude      != null ? store.latitude  : '',
+        store?.longitude     != null ? store.longitude : '',
+        store?.gadm_kecamatan ?? '',
+        store?.gadm_kelurahan ?? '',
       ]
-      if (isM2) {
-        row.push(a.visit_ganjil ? 'Ya' : '-')
-        row.push(a.visit_genap  ? 'Ya' : '-')
-      }
-      row.push(store?.omset     != null ? store.omset     : '')
-      row.push(store?.latitude  != null ? store.latitude  : '')
-      row.push(store?.longitude != null ? store.longitude : '')
-      row.push(a.qc_flag ?? '')
-      return row
     })
 
     const ws = XLSX.utils.aoa_to_sheet([headers, ...dataRows])
 
-    // Lebar kolom
-    const widths = [5, 14, 32, 14, 10, 8]
-    if (isM2) widths.push(14, 14)
-    widths.push(14, 12, 12, 26)
-    setColWidths(ws, widths)
+    // Lebar kolom (12 kolom)
+    setColWidths(ws, [5, 14, 32, 14, 10, 8, 16, 14, 12, 12, 18, 18])
 
     // Freeze baris header
     ws['!freeze'] = { xSplit: 0, ySplit: 1 }

@@ -55,6 +55,8 @@ interface StorePoint {
   div_sls         : string | null
   visit_frequency : string | null
   omset           : number | null
+  gadm_kecamatan  : string | null
+  gadm_kelurahan  : string | null
 }
 
 interface DivisionConfig {
@@ -167,10 +169,11 @@ function salesLabel(name: string): string {
 // PlanMap
 // ─────────────────────────────────────────────────────────────────────────────
 
-function PlanMap({ lat, lon, zoom, stores, storeStyles, selectedCodes, onStoreClick, onMapInteract }: {
+function PlanMap({ lat, lon, zoom, stores, storeStyles, selectedCodes, highlightCodes, onStoreClick, onMapInteract }: {
   lat:number; lon:number; zoom:number
   stores:StorePoint[]; storeStyles:StoreStyleMap
   selectedCodes?  : Set<string>
+  highlightCodes? : Set<string>
   onStoreClick?   : (store: StorePoint, pos: ClickPos, isCtrl: boolean) => void
   onMapInteract?  : () => void
 }) {
@@ -219,11 +222,16 @@ function PlanMap({ lat, lon, zoom, stores, storeStyles, selectedCodes, onStoreCl
       if (!storeLayerRef.current) return
       storeLayerRef.current.clearLayers()
       stores.forEach(s => {
-        const style  = storeStyles[s.customer_code]
-        const isSel  = selectedCodes?.has(s.customer_code) ?? false
-        const color  = isSel ? '#f59e0b' : (style?.fillColor ?? '#0c9488')
-        const border = isSel ? '#d97706' : '#fff'
-        L.circleMarker([s.latitude,s.longitude],{radius:isSel?7:5,fillColor:color,color:border,weight:isSel?2:1,opacity:1,fillOpacity:0.9})
+        const style    = storeStyles[s.customer_code]
+        const isSel    = selectedCodes?.has(s.customer_code) ?? false
+        const isHi     = highlightCodes?.has(s.customer_code) ?? false
+        const hiActive = (highlightCodes?.size ?? 0) > 0
+        const color    = isSel ? '#f59e0b' : (style?.fillColor ?? '#0c9488')
+        const border   = isSel ? '#d97706' : isHi ? '#111827' : '#fff'
+        const radius   = isSel ? 7 : isHi ? 8 : 5
+        const weight   = isSel ? 2 : isHi ? 3 : 1
+        const fOp      = (hiActive && !isHi && !isSel) ? 0.4 : 0.9   // dim toko di luar wilayah terpilih
+        L.circleMarker([s.latitude,s.longitude],{radius,fillColor:color,color:border,weight,opacity:1,fillOpacity:fOp})
           .addTo(storeLayerRef.current!)
           .on('click', (e) => {
             const le     = e as unknown as { containerPoint:{x:number;y:number}; originalEvent:MouseEvent }
@@ -233,7 +241,7 @@ function PlanMap({ lat, lon, zoom, stores, storeStyles, selectedCodes, onStoreCl
           })
       })
     })
-  },[stores,storeStyles,selectedCodes])
+  },[stores,storeStyles,selectedCodes,highlightCodes])
 
   return <div ref={containerRef} className="absolute inset-0" />
 }
@@ -744,29 +752,287 @@ function DivisionAccordion({ div, divState, onParamChange, onToggle, onRunStage1
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CoverageAdjustDivView — tab "Wilayah": kecamatan→kelurahan→nama sales,
+// + adjustment (pindahkan kelurahan antar sales) saat s1_done
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CoverageAdjustDivView({ divId, territories, stores, canAdjust, onReassign, regionFilter }:{
+  divId        : string
+  territories  : Territory[]
+  stores       : StorePoint[]
+  canAdjust    : boolean
+  onReassign   : (divId:string, codes:string[], toSales:string) => void
+  regionFilter : { selected:Set<string>; toggle:(k:string)=>void; clear:()=>void }
+}) {
+  const [exKec, setExKec] = useState<Set<string>>(new Set())
+  const [move,  setMove]  = useState<null|{scope:'kec'|'kel';label:string;sub:string;fromSales:string;codes:string[]}>(null)
+  const toggle = (k:string)=>setExKec(p=>{const n=new Set(p);n.has(k)?n.delete(k):n.add(k);return n})
+
+  const salesColor = useMemo(()=>{
+    const m:Record<string,string>={}
+    territories.forEach(t=>{m[t.sales_name]=TERRITORY_COLORS[t.sales_index%TERRITORY_COLORS.length]})
+    return m
+  },[territories])
+
+  // code → {kec,kel}
+  const gadm = useMemo(()=>{
+    const m=new Map<string,{kec:string;kel:string}>()
+    stores.forEach(s=>m.set(s.customer_code,{kec:s.gadm_kecamatan||'—',kel:s.gadm_kelurahan||'—'}))
+    return m
+  },[stores])
+
+  // kecamatan → { bySales (level kec), kelurahan[] → bySales (level kel) }
+  const tree = useMemo(()=>{
+    const kecMap = new Map<string,{bySales:Map<string,string[]>;kels:Map<string,{kelurahan:string;total:number;bySales:Map<string,string[]>}>}>()
+    territories.forEach(t=>t.customer_codes.forEach(code=>{
+      const g = gadm.get(code); if(!g) return
+      if(!kecMap.has(g.kec)) kecMap.set(g.kec,{bySales:new Map(),kels:new Map()})
+      const kec = kecMap.get(g.kec)!
+      if(!kec.bySales.has(t.sales_name)) kec.bySales.set(t.sales_name,[])
+      kec.bySales.get(t.sales_name)!.push(code)
+      if(!kec.kels.has(g.kel)) kec.kels.set(g.kel,{kelurahan:g.kel,total:0,bySales:new Map()})
+      const kel = kec.kels.get(g.kel)!
+      kel.total++
+      if(!kel.bySales.has(t.sales_name)) kel.bySales.set(t.sales_name,[])
+      kel.bySales.get(t.sales_name)!.push(code)
+    }))
+    return [...kecMap.entries()].map(([kec,v])=>{
+      const kels = [...v.kels.values()].sort((a,b)=>b.total-a.total)
+      return { kec, kels, bySales: v.bySales, total: kels.reduce((s,k)=>s+k.total,0), salesCount: v.bySales.size }
+    }).sort((a,b)=>b.total-a.total)
+  },[territories,gadm])
+
+  // Helper: render chip nama sales (klik = buka modal pindah) — dipakai kec & kel
+  const clickable = canAdjust && territories.length > 1
+  const renderChips = (bySales:Map<string,string[]>, scope:'kec'|'kel', label:string, sub:string) => (
+    <div className="flex flex-wrap gap-[3px] justify-end shrink-0" style={{maxWidth:116}}>
+      {[...bySales.entries()].map(([sn,codes])=>{
+        const c=salesColor[sn]??'#9099a8'
+        return (
+          <button key={sn} type="button" disabled={!clickable}
+                  onClick={(e)=>{e.stopPropagation(); if(clickable) setMove({scope,label,sub,fromSales:sn,codes})}}
+                  className="text-[8px] font-bold font-data-mono px-[4px] py-[1px] rounded leading-none"
+                  style={{background:c+'22',color:c,cursor:clickable?'pointer':'default',outline:clickable?`1px solid ${c}55`:'none'}}
+                  title={clickable?`Pindahkan ${codes.length} toko dari ${salesLabel(sn)}`:undefined}>
+            {salesLabel(sn)}<span className="font-normal opacity-70">·{codes.length}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+
+  const totalKel   = useMemo(()=>tree.reduce((s,k)=>s+k.kels.length,0),[tree])
+  const totalSplit = useMemo(()=>tree.reduce((s,k)=>s+k.kels.filter(x=>x.bySales.size>1).length,0),[tree])
+
+  if (tree.length===0) return (
+    <div className="px-md py-lg text-center text-[11px] text-on-surface-variant">Belum ada data wilayah.</div>
+  )
+
+  return (
+    <div className="rounded-lg overflow-hidden" style={{border:'1px solid rgba(80,95,118,0.12)'}}>
+      {/* Ringkasan */}
+      <div className="px-sm py-[5px] flex items-center gap-md text-[9px] text-on-surface-variant"
+           style={{background:'#fbfcfd',borderBottom:'1px solid rgba(80,95,118,0.08)'}}>
+        <span>{tree.length} kec</span><span>{totalKel} kel</span>
+        {totalSplit>0 && (
+          <span className="flex items-center gap-[2px]" style={{color:'#b45309'}}>
+            <span className="material-symbols-outlined" style={{fontSize:10}}>call_split</span>{totalSplit} terbelah
+          </span>
+        )}
+        {regionFilter.selected.size>0
+          ? <button type="button" onClick={regionFilter.clear}
+                    className="ml-auto flex items-center gap-[2px] px-[5px] py-[1px] rounded-full"
+                    style={{background:'rgba(124,58,237,0.12)',color:'#7c3aed'}}>
+              <span className="material-symbols-outlined" style={{fontSize:10}}>filter_alt_off</span>hapus highlight
+            </button>
+          : <span className="ml-auto italic text-[8px]">klik nama→peta · chip→pindah</span>}
+      </div>
+
+      {tree.map(kec=>{
+        const isEx=exKec.has(kec.kec)
+        const kecKey=`kec:${kec.kec}`
+        const kecSel=regionFilter.selected.has(kecKey)
+        return (
+          <div key={kec.kec}>
+            {/* Header kecamatan: chevron=expand · nama=peta · chip=pindah */}
+            <div className="flex items-center gap-[4px] px-sm py-[5px]"
+                 style={{background:kecSel?'rgba(124,58,237,0.07)':'#f7f9fb',borderBottom:'1px solid rgba(80,95,118,0.08)',borderLeft:kecSel?'2px solid #7c3aed':'2px solid transparent'}}>
+              <button type="button" onClick={()=>toggle(kec.kec)} className="shrink-0 flex items-center text-on-surface-variant">
+                <span className="material-symbols-outlined" style={{fontSize:13}}>{isEx?'expand_more':'chevron_right'}</span>
+              </button>
+              <button type="button" onClick={()=>regionFilter.toggle(kecKey)} title="Tampilkan di peta"
+                      className="flex-1 min-w-0 text-left flex items-center gap-[3px]">
+                {kecSel && <span className="material-symbols-outlined" style={{fontSize:11,color:'#7c3aed'}}>place</span>}
+                <span className="text-[10px] font-semibold truncate" style={{color:kecSel?'#7c3aed':'#191c1e'}}>{kec.kec}</span>
+              </button>
+              <span className="text-[9px] text-on-surface-variant shrink-0">{kec.kels.length} kel</span>
+              <span className="text-[10px] font-data-mono text-on-surface shrink-0">{kec.total}</span>
+              {/* Jumlah sales yang cover (read-only) — split bila >1, expand utk detail+pindah per kelurahan */}
+              <span className="text-[9px] font-data-mono shrink-0 flex items-center gap-[1px]"
+                    style={{color: kec.salesCount>1 ? '#b45309' : '#7c3aed'}}>
+                {kec.salesCount>1 && <span className="material-symbols-outlined" style={{fontSize:10}}>call_split</span>}
+                {kec.salesCount} sls
+              </span>
+            </div>
+            {isEx && kec.kels.map((k,ki)=>{
+              const split = k.bySales.size>1
+              const kelKey=`kel:${kec.kec}|${k.kelurahan}`
+              const kelSel=regionFilter.selected.has(kelKey)
+              return (
+                <div key={k.kelurahan} className="flex items-center gap-[6px] px-sm py-[5px] pl-[20px]"
+                     style={{background:kelSel?'rgba(124,58,237,0.06)':ki%2===0?'#fff':'#fafbfc',borderBottom:'1px solid rgba(80,95,118,0.05)',borderLeft:kelSel?'2px solid #7c3aed':'2px solid transparent'}}>
+                  <button type="button" onClick={()=>regionFilter.toggle(kelKey)} title="Tampilkan di peta"
+                          className="flex-1 min-w-0 text-left flex items-center gap-[3px]">
+                    {kelSel && <span className="material-symbols-outlined" style={{fontSize:10,color:'#7c3aed'}}>place</span>}
+                    <span className="text-[10px] leading-snug truncate" style={{color:kelSel?'#7c3aed':'#191c1e'}}>{k.kelurahan}</span>
+                    {split && <span className="material-symbols-outlined" style={{fontSize:10,color:'#b45309'}}>call_split</span>}
+                  </button>
+                  <span className="text-[10px] font-data-mono text-on-surface-variant shrink-0">{k.total}</span>
+                  {renderChips(k.bySales,'kel',k.kelurahan,kec.kec)}
+                </div>
+              )
+            })}
+          </div>
+        )
+      })}
+
+      {/* Modal pindah kelurahan */}
+      {move && (
+        <div className="fixed inset-0 z-[600] flex items-center justify-center p-lg" style={{background:'rgba(0,0,0,0.45)'}}
+             onClick={e=>{if(e.target===e.currentTarget)setMove(null)}}>
+          <div className="bg-surface-container-lowest rounded-xl shadow-2xl w-full flex flex-col" style={{maxWidth:'24rem'}}>
+            <div className="flex items-start gap-md p-lg border-b border-secondary/10">
+              <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{background:'rgba(124,58,237,0.1)'}}>
+                <span className="material-symbols-outlined" style={{color:'#7c3aed',fontSize:18}}>swap_horiz</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-headline-md text-headline-md text-primary leading-tight">Pindahkan {move.scope==='kec'?'kecamatan':'kelurahan'}</p>
+                <p className="font-body-sm text-body-sm text-on-surface-variant">
+                  <span className="font-semibold">{move.label}</span> · {move.sub} · {move.codes.length} toko<br/>
+                  dari <span className="font-data-mono font-semibold" style={{color:salesColor[move.fromSales]}}>{salesLabel(move.fromSales)}</span> ke:
+                </p>
+              </div>
+              <button onClick={()=>setMove(null)} className="p-xs rounded-lg hover:bg-surface-container text-on-surface-variant">
+                <span className="material-symbols-outlined" style={{fontSize:18}}>close</span>
+              </button>
+            </div>
+            <div className="p-md flex flex-col gap-xs max-h-[40vh] overflow-y-auto">
+              {territories.filter(t=>t.sales_name!==move.fromSales).map(t=>{
+                const c=salesColor[t.sales_name]??'#9099a8'
+                return (
+                  <button key={t.sales_name} type="button"
+                          onClick={()=>{onReassign(divId,move.codes,t.sales_name);setMove(null)}}
+                          className="flex items-center gap-sm px-md py-sm rounded-lg border transition-colors hover:bg-surface-container text-left"
+                          style={{borderColor:'rgba(80,95,118,0.15)'}}>
+                    <span className="w-[10px] h-[10px] rounded-[2px] shrink-0" style={{background:c}}/>
+                    <span className="flex-1 font-data-mono text-sm font-semibold text-on-surface">{salesLabel(t.sales_name)}</span>
+                    <span className="text-[11px] text-on-surface-variant font-data-mono">{t.store_count} toko</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Wilayah satu salesman (expand di tab Per Sales) — kecamatan→kelurahan + jml toko.
+// Klik nama → highlight di peta (ter-scope ke toko salesman ini krn hanya itu yg visible).
+function SalesWilayahView({ codes, stores, regionFilter }:{
+  codes:string[]; stores:StorePoint[]
+  regionFilter:{ selected:Set<string>; toggle:(k:string)=>void }
+}) {
+  const [exKec, setExKec] = useState<Set<string>>(new Set())
+  const toggle = (k:string)=>setExKec(p=>{const n=new Set(p);n.has(k)?n.delete(k):n.add(k);return n})
+  const gadm = useMemo(()=>{
+    const m=new Map<string,{kec:string;kel:string}>()
+    stores.forEach(s=>m.set(s.customer_code,{kec:s.gadm_kecamatan||'—',kel:s.gadm_kelurahan||'—'}))
+    return m
+  },[stores])
+  const tree = useMemo(()=>{
+    const kecMap=new Map<string,Map<string,number>>()
+    codes.forEach(c=>{ const g=gadm.get(c); if(!g)return
+      if(!kecMap.has(g.kec)) kecMap.set(g.kec,new Map())
+      const km=kecMap.get(g.kec)!; km.set(g.kel,(km.get(g.kel)??0)+1) })
+    return [...kecMap.entries()].map(([kec,km])=>({
+      kec, total:[...km.values()].reduce((a,b)=>a+b,0),
+      kels:[...km.entries()].map(([kel,n])=>({kel,n})).sort((a,b)=>b.n-a.n),
+    })).sort((a,b)=>b.total-a.total)
+  },[codes,gadm])
+  if (tree.length===0) return <div className="px-[26px] py-[4px] text-[9px] text-on-surface-variant">—</div>
+  return (
+    <div className="py-[1px]" style={{background:'rgba(80,95,118,0.015)'}}>
+      {tree.map(k=>{
+        const isEx=exKec.has(k.kec)
+        const kecKey=`kec:${k.kec}`
+        const kecSel=regionFilter.selected.has(kecKey)
+        return (
+          <div key={k.kec}>
+            <div className="flex items-center gap-[4px] px-[22px] py-[3px]"
+                 style={{background:kecSel?'rgba(124,58,237,0.06)':undefined,borderLeft:kecSel?'2px solid #7c3aed':'2px solid transparent'}}>
+              <button type="button" onClick={()=>toggle(k.kec)} className="shrink-0 flex items-center text-on-surface-variant">
+                <span className="material-symbols-outlined" style={{fontSize:11}}>{isEx?'expand_more':'chevron_right'}</span>
+              </button>
+              <button type="button" onClick={()=>regionFilter.toggle(kecKey)} title="Highlight di peta"
+                      className="flex-1 min-w-0 text-left flex items-center gap-[3px]">
+                {kecSel && <span className="material-symbols-outlined" style={{fontSize:10,color:'#7c3aed'}}>place</span>}
+                <span className="text-[9px] font-semibold truncate" style={{color:kecSel?'#7c3aed':'#191c1e'}}>{k.kec}</span>
+              </button>
+              <span className="text-[8px] text-on-surface-variant shrink-0">{k.kels.length} kel</span>
+              <span className="text-[9px] font-data-mono text-on-surface shrink-0">{k.total}</span>
+            </div>
+            {isEx && k.kels.map(kel=>{
+              const kelKey=`kel:${k.kec}|${kel.kel}`
+              const kelSel=regionFilter.selected.has(kelKey)
+              return (
+                <div key={kel.kel} className="flex items-center gap-[5px] px-[38px] py-[2px]"
+                     style={{background:kelSel?'rgba(124,58,237,0.05)':undefined,borderLeft:kelSel?'2px solid #7c3aed':'2px solid transparent'}}>
+                  <button type="button" onClick={()=>regionFilter.toggle(kelKey)} title="Highlight di peta"
+                          className="flex-1 min-w-0 text-left flex items-center gap-[3px]">
+                    {kelSel && <span className="material-symbols-outlined" style={{fontSize:9,color:'#7c3aed'}}>place</span>}
+                    <span className="text-[9px] truncate" style={{color:kelSel?'#7c3aed':'#45464d'}}>{kel.kel}</span>
+                  </button>
+                  <span className="text-[9px] font-data-mono text-on-surface-variant shrink-0">{kel.n}</span>
+                </div>
+              )
+            })}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SummaryPanel — panel KANAN: wilayah → jadwal → hari → ganjil/genap
 // ─────────────────────────────────────────────────────────────────────────────
 
 function SummaryPanel({
-  divisions, divisionStates, omsetByCode, selectedSales, anyRunning, viewMode,
-  onSelectSales, onRunStage2, onSavePlan, onNavigatePlans, onHide, onViewModeChange,
+  divisions, divisionStates, omsetByCode, selectedSales, anyRunning, viewMode, stores,
+  onSelectSales, onRunStage2, onSavePlan, onNavigatePlans, onHide, onViewModeChange, onReassignKelurahan, regionFilter,
 }: {
-  divisions        : DivisionConfig[]
-  divisionStates   : Map<string,DivisionState>
-  omsetByCode      : Record<string,number>
-  selectedSales    : SelectedSales | null
-  anyRunning       : boolean
-  viewMode         : 'sales'|'day'
-  onSelectSales    : (s:SelectedSales|null) => void
-  onRunStage2      : (divId:string) => void
-  onSavePlan       : () => void
-  onNavigatePlans  : () => void
-  onHide           : () => void
-  onViewModeChange : (mode:'sales'|'day') => void
+  divisions          : DivisionConfig[]
+  divisionStates     : Map<string,DivisionState>
+  omsetByCode        : Record<string,number>
+  selectedSales      : SelectedSales | null
+  anyRunning         : boolean
+  viewMode           : 'sales'|'day'|'wilayah'
+  stores             : StorePoint[]
+  onSelectSales      : (s:SelectedSales|null) => void
+  onRunStage2        : (divId:string) => void
+  onSavePlan         : () => void
+  onNavigatePlans    : () => void
+  onHide             : () => void
+  onViewModeChange   : (mode:'sales'|'day'|'wilayah') => void
+  onReassignKelurahan: (divId:string, codes:string[], toSales:string) => void
+  regionFilter       : { selected:Set<string>; toggle:(k:string)=>void; clear:()=>void }
 }) {
   // Expand state: keys = "divId||salesName" dan "divId||salesName||day"
   const [exSales,   setExSales]   = useState<Set<string>>(new Set())
   const [exDays,    setExDays]    = useState<Set<string>>(new Set())
+  const [salesTab,  setSalesTab]  = useState<Record<string,'hari'|'wilayah'>>({})  // per-sales expand: Hari/Wilayah (Opsi A)
 
   const toggleSales = (k:string) => setExSales(p => { const n=new Set(p); n.has(k)?n.delete(k):n.add(k); return n })
   const toggleDay   = (k:string) => setExDays (p => { const n=new Set(p); n.has(k)?n.delete(k):n.add(k); return n })
@@ -890,23 +1156,47 @@ function SummaryPanel({
                 )
               })()}
 
-              {/* Toggle Per Sales / Per Hari — hanya tampil saat ada jadwal */}
-              {sched && sched.length > 0 && (
+              {/* Toggle Per Sales / Per Hari / Wilayah */}
+              {(s1done || (sched && sched.length > 0)) && (
                 <div className="flex mb-[6px] rounded-lg overflow-hidden" style={{border:'1px solid rgba(80,95,118,0.15)'}}>
                   <button type="button" onClick={()=>onViewModeChange('sales')}
                           className={`flex-1 flex items-center justify-center gap-[4px] py-[5px] text-[10px] font-semibold transition-colors ${viewMode==='sales'?'bg-primary text-on-primary':'text-on-surface-variant hover:bg-surface-container'}`}
                           style={{background:viewMode==='sales'?undefined:'#fff'}}>
                     <span className="material-symbols-outlined" style={{fontSize:11}}>person</span>Per Sales
                   </button>
+                  {sched && sched.length > 0 && (
                   <button type="button" onClick={()=>onViewModeChange('day')}
                           className={`flex-1 flex items-center justify-center gap-[4px] py-[5px] text-[10px] font-semibold transition-colors border-l ${viewMode==='day'?'bg-primary text-on-primary':'text-on-surface-variant hover:bg-surface-container'}`}
                           style={{borderColor:'rgba(80,95,118,0.15)',background:viewMode==='day'?undefined:'#fff'}}>
                     <span className="material-symbols-outlined" style={{fontSize:11}}>calendar_today</span>Per Hari
                   </button>
+                  )}
+                  <button type="button" onClick={()=>onViewModeChange('wilayah')}
+                          className={`flex-1 flex items-center justify-center gap-[4px] py-[5px] text-[10px] font-semibold transition-colors border-l ${viewMode==='wilayah'?'bg-primary text-on-primary':'text-on-surface-variant hover:bg-surface-container'}`}
+                          style={{borderColor:'rgba(80,95,118,0.15)',background:viewMode==='wilayah'?undefined:'#fff'}}>
+                    <span className="material-symbols-outlined" style={{fontSize:11}}>map</span>Wilayah
+                  </button>
                 </div>
               )}
 
-              {/* Accordion */}
+              {/* Wilayah view (kecamatan→kelurahan + adjustment saat s1_done).
+                  TRAFFIC: di s1_done teritori = zona HARI (bukan sales) → jangan tampilkan coverage
+                  per-sales yang menyesatkan; per-sales baru valid setelah Generate Jadwal (s2_preview). */}
+              {viewMode==='wilayah' ? (
+                (isTraffic && !(sched && sched.length>0)) ? (
+                  <div className="rounded-lg overflow-hidden px-md py-md flex items-start gap-sm"
+                       style={{border:'1px solid rgba(234,179,8,0.3)',background:'rgba(234,179,8,0.06)'}}>
+                    <span className="material-symbols-outlined shrink-0" style={{fontSize:14,color:'#b45309'}}>info</span>
+                    <p className="text-[10px] text-on-surface-variant leading-snug">
+                      <b>TRAFFIC</b> membagi per <b>hari</b> dulu — salesman ditentukan per hari saat Generate Jadwal.
+                      Coverage &amp; adjustment per-sales muncul setelah jadwal dibuat.
+                    </p>
+                  </div>
+                ) : (
+                  <CoverageAdjustDivView divId={div.id} territories={displayTerr} stores={stores}
+                                         canAdjust={s1done} onReassign={onReassignKelurahan} regionFilter={regionFilter}/>
+                )
+              ) : (
               <div className="rounded-lg overflow-hidden" style={{border:'1px solid rgba(80,95,118,0.12)'}}>
 
                 {/* ── Per-Hari view ── */}
@@ -1018,18 +1308,27 @@ function SummaryPanel({
                       </div>
 
                       {/* ── Day rows (expand) ── */}
-                      {isExSales&&(
+                      {isExSales&&(()=>{
+                        const mode = salesSch ? (salesTab[salesKey] ?? 'hari') : 'wilayah'
+                        return (
                         <div style={{borderBottom:i<terr.length-1?'1px solid rgba(80,95,118,0.07)':undefined}}>
-                          {!salesSch?(
-                            /* Belum ada jadwal */
-                            <div className="flex items-center gap-xs px-[26px] py-[5px]"
-                                 style={{background:'rgba(59,130,246,0.03)'}}>
-                              <span className="material-symbols-outlined" style={{fontSize:11,color:'#9099a8'}}>info</span>
-                              <span className="text-[9px] text-on-surface-variant">Generate Jadwal untuk lihat jadwal per hari</span>
+                          {/* Mini-toggle Hari/Wilayah — hanya bila sudah ada jadwal */}
+                          {salesSch&&(
+                            <div className="flex items-center gap-[3px] px-[24px] py-[3px]" style={{background:'rgba(80,95,118,0.03)'}}>
+                              <span className="material-symbols-outlined" style={{fontSize:10,color:'#9099a8'}}>swap_horiz</span>
+                              {(['hari','wilayah'] as const).map(m=>(
+                                <button key={m} type="button" onClick={()=>setSalesTab(p=>({...p,[salesKey]:m}))}
+                                        className="px-[6px] py-[1px] rounded text-[8px] font-bold transition-colors"
+                                        style={{background:mode===m?'rgba(124,58,237,0.14)':'transparent',color:mode===m?'#7c3aed':'#9099a8'}}>
+                                  {m==='hari'?'Per Hari':'Wilayah'}
+                                </button>
+                              ))}
                             </div>
+                          )}
+                          {mode==='wilayah'?(
+                            <SalesWilayahView codes={t.customer_codes} stores={stores} regionFilter={regionFilter}/>
                           ):(
-                            /* Ada jadwal */
-                            salesSch.days
+                            salesSch!.days
                               .slice()
                               .sort((a,b)=>DAY_ORDER.indexOf(a.day_of_week)-DAY_ORDER.indexOf(b.day_of_week))
                               .map(day => {
@@ -1096,7 +1395,8 @@ function SummaryPanel({
                               })
                           )}
                         </div>
-                      )}
+                        )
+                      })()}
                     </div>
                   )
                 })}
@@ -1116,6 +1416,7 @@ function SummaryPanel({
                   )}
                 </div>
               </div>
+              )}
 
             </div>
           )
@@ -1175,14 +1476,15 @@ export default function RoutingEnginePage() {
   const [leftHidden,     setLeftHidden]     = useState(false)
   const [rightHidden,    setRightHidden]    = useState(false)
   const [selectedSales,  setSelectedSales]  = useState<SelectedSales|null>(null)
-  const [summaryViewMode,setSummaryViewMode]= useState<'sales'|'day'>('sales')
+  const [summaryViewMode,setSummaryViewMode]= useState<'sales'|'day'|'wilayah'>('sales')
   const [selectedStore,  setSelectedStore]  = useState<SelectedStore|null>(null)
   const [multiSelected,  setMultiSelected]  = useState<Set<string>>(new Set())
+  const [selectedRegions,setSelectedRegions]= useState<Set<string>>(new Set())  // tab Wilayah → filter peta (multi)
 
   // ── Load stores ──────────────────────────────────────────────────────────
   useEffect(() => {
     setStores([]); setDivisions([]); setDivisionStates(new Map())
-    setSelectedSales(null); setSelectedStore(null); setMultiSelected(new Set())
+    setSelectedSales(null); setSelectedStore(null); setMultiSelected(new Set()); setSelectedRegions(new Set())
     setSummaryViewMode('sales')
     if (!areaId) { setStoresLoading(false); return }
     let cancelled = false
@@ -1284,6 +1586,23 @@ export default function RoutingEnginePage() {
     })
     setDivisionStates(prev => new Map(prev).set(divId, { ...cur, territories: newTerritories }))
     setMultiSelected(new Set())
+  }
+
+  // ── Pindahkan kelurahan: set kode tertentu → sales lain (tab Wilayah) ──
+  function handleReassignCodes(divId: string, codes: string[], toSales: string) {
+    const cur = divisionStates.get(divId)
+    if (!cur?.territories || cur.stage !== 's1_done') return
+    const codeSet = new Set(codes)
+    if (codeSet.size === 0) return
+    const newTerritories = cur.territories.map(t => {
+      if (t.sales_name === toSales) {
+        const toAdd = [...codeSet].filter(c => !t.customer_codes.includes(c))
+        return { ...t, customer_codes: [...t.customer_codes, ...toAdd], store_count: t.store_count + toAdd.length }
+      }
+      const filtered = t.customer_codes.filter(c => !codeSet.has(c))
+      return { ...t, customer_codes: filtered, store_count: filtered.length }
+    })
+    setDivisionStates(prev => new Map(prev).set(divId, { ...cur, territories: newTerritories }))
   }
 
   // ── Stage 1 ────────────────────────────────────────────────────────────
@@ -1404,6 +1723,25 @@ export default function RoutingEnginePage() {
   const hasRightData = divisions.some(d=>divisionStates.get(d.id)?.territories?.length)
 
   // ── Visible stores + styles ────────────────────────────────────────────
+  // ── Wilayah (tab Wilayah): pilih kecamatan/kelurahan = HIGHLIGHT di peta (bukan filter) ──
+  const inSelectedRegion = (s:StorePoint)=>{
+    const kec=s.gadm_kecamatan||'—', kel=s.gadm_kelurahan||'—'
+    return selectedRegions.has(`kec:${kec}`) || selectedRegions.has(`kel:${kec}|${kel}`)
+  }
+  const toggleRegion = (key:string)=>{
+    // Single-select: klik wilayah lain mengganti pilihan; klik yg sama → lepas.
+    // TIDAK clear selectedSales → highlight menyatu dgn fokus salesman (ter-scope ke toko salesman aktif).
+    setSelectedRegions(prev=> prev.has(key) ? new Set() : new Set([key]))
+  }
+  const clearRegions = ()=>setSelectedRegions(new Set())
+  // Kode toko di wilayah terpilih → peta perbesar + outline (warna fill tetap by sales, semua toko tetap tampil)
+  const highlightCodes = useMemo(()=>{
+    if (selectedRegions.size===0) return new Set<string>()
+    const set=new Set<string>()
+    stores.forEach(s=>{ if(inSelectedRegion(s)) set.add(s.customer_code) })
+    return set
+  },[stores,selectedRegions]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const visibleStores = useMemo(()=>{
     if (selectedSales) {
       // 1. Filter ke hari tertentu (+ opsional filter ke satu minggu)
@@ -1547,7 +1885,7 @@ export default function RoutingEnginePage() {
     <div className="h-full relative overflow-hidden">
 
       <PlanMap lat={mapLat} lon={mapLon} zoom={mapZoom} stores={visibleStores} storeStyles={storeStyles}
-               selectedCodes={multiSelected}
+               selectedCodes={multiSelected} highlightCodes={highlightCodes}
                onStoreClick={handleStoreClick}
                onMapInteract={() => setSelectedStore(null)}/>
 
@@ -1770,12 +2108,15 @@ export default function RoutingEnginePage() {
           selectedSales={selectedSales}
           anyRunning={anyRunning}
           viewMode={summaryViewMode}
-          onSelectSales={setSelectedSales}
+          stores={stores}
+          onSelectSales={(s)=>{ if(s) setSelectedRegions(new Set()); setSelectedSales(s) }}
           onRunStage2={runStage2}
           onSavePlan={savePlan}
           onNavigatePlans={()=>navigate('/plans')}
           onHide={()=>setRightHidden(true)}
-          onViewModeChange={setSummaryViewMode}
+          onViewModeChange={(m)=>{ setSummaryViewMode(m); if(m==='wilayah') setSelectedSales(null) }}
+          onReassignKelurahan={handleReassignCodes}
+          regionFilter={{ selected: selectedRegions, toggle: toggleRegion, clear: clearRegions }}
         />
       )}
     </div>

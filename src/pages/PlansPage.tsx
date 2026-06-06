@@ -402,8 +402,8 @@ export default function PlansPage() {
         <div className="fixed inset-0 z-50 flex items-end justify-center pb-xl px-md"
              style={{ background: 'rgba(0,0,0,0.35)' }}
              onClick={() => setDiscardConfirm(null)}>
-          <div className="w-full max-w-sm bg-surface-container-lowest rounded-2xl shadow-2xl p-lg flex flex-col gap-md"
-               style={{ border: '1px solid rgba(186,26,26,0.15)' }}
+          <div className="w-full bg-surface-container-lowest rounded-2xl shadow-2xl p-lg flex flex-col gap-md"
+               style={{ maxWidth: '24rem', border: '1px solid rgba(186,26,26,0.15)' }}
                onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-sm">
               <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"

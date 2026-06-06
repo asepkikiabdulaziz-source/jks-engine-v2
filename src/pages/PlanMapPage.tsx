@@ -43,6 +43,11 @@ interface AssignmentRow {
   visit_ganjil: boolean; visit_genap: boolean; visit_order: number
   qc_flag: string|null
 }
+// Coverage summary per plan (RPC get_plan_coverage_summary): kecamatan→kelurahan
+interface CoverageRow {
+  kecamatan: string; kelurahan: string
+  jml_toko: number;  sales_names: string[]
+}
 interface DivMeta {
   div_sls: string; n_sales: number; work_days: number
   cycle: string;   philosophy: string; store_count: number
@@ -162,8 +167,100 @@ function PlanMap({ lat, lon, zoom, stores, storeStyles }:{
 // ReviewSummaryPanel
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Tab "Wilayah": kecamatan → kelurahan → jml toko + NAMA salesman yang cover
+function CoverageView({ coverage, salesColor }:{
+  coverage   : CoverageRow[]
+  salesColor : Record<string,string>
+}) {
+  const [exKec, setExKec] = useState<Set<string>>(new Set())
+  const toggle = (k:string)=>setExKec(p=>{const n=new Set(p);n.has(k)?n.delete(k):n.add(k);return n})
+
+  // Group kelurahan per kecamatan; kecamatan diurut total toko desc
+  const byKec = useMemo(()=>{
+    const m = new Map<string,CoverageRow[]>()
+    for (const r of coverage){ if(!m.has(r.kecamatan)) m.set(r.kecamatan,[]); m.get(r.kecamatan)!.push(r) }
+    for (const arr of m.values()) arr.sort((a,b)=>b.jml_toko-a.jml_toko)
+    return [...m.entries()].sort((a,b)=>
+      b[1].reduce((s,r)=>s+r.jml_toko,0)-a[1].reduce((s,r)=>s+r.jml_toko,0))
+  },[coverage])
+
+  const totalSplit = coverage.filter(r=>r.sales_names.length>1).length
+
+  if (coverage.length===0) return (
+    <div className="px-md py-xl text-center text-[11px] text-on-surface-variant leading-relaxed">
+      Belum ada data coverage.<br/>Plan ini belum punya assignment.
+    </div>
+  )
+
+  return (
+    <div>
+      {/* Ringkasan */}
+      <div className="px-sm py-[6px] flex items-center gap-md text-[10px] text-on-surface-variant"
+           style={{borderBottom:'1px solid rgba(80,95,118,0.08)',background:'#fbfcfd'}}>
+        <span>{byKec.length} kecamatan</span>
+        <span>{coverage.length} kelurahan</span>
+        {totalSplit>0 && (
+          <span className="flex items-center gap-[2px]" style={{color:'#b45309'}}>
+            <span className="material-symbols-outlined" style={{fontSize:11}}>call_split</span>
+            {totalSplit} terbelah
+          </span>
+        )}
+      </div>
+
+      {byKec.map(([kec,rows])=>{
+        const isEx     = exKec.has(kec)
+        const toko     = rows.reduce((s,r)=>s+r.jml_toko,0)
+        const salesSet = new Set<string>(); rows.forEach(r=>r.sales_names.forEach(s=>salesSet.add(s)))
+        return (
+          <div key={kec}>
+            {/* Kecamatan header */}
+            <div className="flex items-center gap-[5px] px-sm py-[6px] cursor-pointer"
+                 style={{background:'#f7f9fb',borderBottom:'1px solid rgba(80,95,118,0.08)'}}
+                 onClick={()=>toggle(kec)}>
+              <span className="material-symbols-outlined text-on-surface-variant shrink-0" style={{fontSize:14}}>
+                {isEx?'expand_more':'chevron_right'}
+              </span>
+              <span className="flex-1 text-[11px] font-semibold text-on-surface truncate">{kec}</span>
+              <span className="text-[9px] text-on-surface-variant shrink-0">{rows.length} kel</span>
+              <span className="text-[10px] font-data-mono text-on-surface shrink-0">{toko}</span>
+              <span className="text-[9px] font-data-mono shrink-0" style={{color:'#7c3aed'}}>{salesSet.size} sls</span>
+            </div>
+            {/* Kelurahan rows */}
+            {isEx && rows.map((r,i)=>{
+              const split = r.sales_names.length>1
+              return (
+                <div key={r.kelurahan} className="flex items-start gap-[6px] px-sm py-[5px] pl-[24px]"
+                     style={{background:i%2===0?'#fff':'#fafbfc',borderBottom:'1px solid rgba(80,95,118,0.05)'}}>
+                  <span className="flex-1 text-[10px] text-on-surface leading-snug min-w-0">
+                    {r.kelurahan}
+                    {split && <span className="material-symbols-outlined align-middle ml-[2px]" style={{fontSize:10,color:'#b45309'}}>call_split</span>}
+                  </span>
+                  <span className="text-[10px] font-data-mono text-on-surface-variant shrink-0 pt-[1px]">{r.jml_toko}</span>
+                  <div className="flex flex-wrap gap-[3px] justify-end shrink-0" style={{maxWidth:118}}>
+                    {r.sales_names.map(sn=>{
+                      const c = salesColor[sn] ?? '#9099a8'
+                      return (
+                        <span key={sn} className="text-[8px] font-bold font-data-mono px-[4px] py-[1px] rounded leading-none"
+                              style={{background:c+'22',color:c}}>
+                          {salesLabel(sn)}
+                        </span>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )
+      })}
+      <div className="h-sm"/>
+    </div>
+  )
+}
+
 function ReviewSummaryPanel({
   planInfo, divResults, omsetByCode, selectedSales, onSelectSales, onHide,
+  coverage, salesColor,
 }:{
   planInfo       : PlanInfo
   divResults     : Map<string,DivResult>
@@ -171,7 +268,10 @@ function ReviewSummaryPanel({
   selectedSales  : SelectedSales|null
   onSelectSales  : (s:SelectedSales|null)=>void
   onHide         : ()=>void
+  coverage       : CoverageRow[]
+  salesColor     : Record<string,string>
 }) {
+  const [tab,     setTab]     = useState<'sales'|'wilayah'>('sales')
   const [exSales, setExSales] = useState<Set<string>>(new Set())
   const [exDays,  setExDays]  = useState<Set<string>>(new Set())
   const toggleSales=(k:string)=>setExSales(p=>{const n=new Set(p);n.has(k)?n.delete(k):n.add(k);return n})
@@ -211,8 +311,26 @@ function ReviewSummaryPanel({
         </button>
       </div>
 
+      {/* Tabs */}
+      <div className="shrink-0 flex" style={{borderBottom:'1px solid rgba(80,95,118,0.1)'}}>
+        {([['sales','Per Sales'],['wilayah','Wilayah']] as const).map(([k,label])=>(
+          <button key={k} type="button" onClick={()=>setTab(k)}
+                  className="flex-1 py-[7px] text-[10px] font-semibold transition-colors"
+                  style={{
+                    color: tab===k?'#7c3aed':'#9099a8',
+                    background: tab===k?'rgba(124,58,237,0.06)':'transparent',
+                    borderBottom: tab===k?'2px solid #7c3aed':'2px solid transparent',
+                  }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
       {/* Body */}
       <div className="flex-1 overflow-y-auto">
+        {tab==='wilayah' ? (
+          <CoverageView coverage={coverage} salesColor={salesColor}/>
+        ) : (<>
         {divsWithData.map(div=>{
           const dr = divResults.get(div.div_sls)!
           const isM2 = div.cycle==='M2'
@@ -335,6 +453,7 @@ function ReviewSummaryPanel({
           )
         })}
         <div className="h-sm"/>
+        </>)}
       </div>
     </div>
   )
@@ -352,6 +471,7 @@ export default function PlanMapPage() {
   const [stores,     setStores]     = useState<StorePoint[]>([])
   const [planInfo,   setPlanInfo]   = useState<PlanInfo|null>(null)
   const [divResults, setDivResults] = useState<Map<string,DivResult>>(new Map())
+  const [coverage,   setCoverage]   = useState<CoverageRow[]>([])
   const [loading,    setLoading]    = useState(true)
   const [error,      setError]      = useState<string|null>(null)
   const [leftHidden,  setLeftHidden]  = useState(false)
@@ -369,7 +489,8 @@ export default function PlanMapPage() {
       supabase.rpc('get_stores_by_area',{p_area_id:activeArea.id}),
       supabase.rpc('get_plans_by_area', {p_area_id:activeArea.id}),
       supabase.rpc('get_plan_assignments',{p_plan_id:planId}),
-    ]).then(([sR,pR,aR])=>{
+      supabase.rpc('get_plan_coverage_summary',{p_plan_id:planId}),
+    ]).then(([sR,pR,aR,cR])=>{
       if (cancelled) return
       const storeData = (sR.data as StorePoint[]) ?? []
       const planData  = (pR.data as PlanInfo[]) ?? []
@@ -380,6 +501,7 @@ export default function PlanMapPage() {
 
       setStores(storeData)
       setPlanInfo(plan)
+      setCoverage((cR.data as CoverageRow[]) ?? [])
 
       // Reconstruct divResults from assignments
       const byDiv: Record<string,AssignmentRow[]> = {}
@@ -456,6 +578,15 @@ export default function PlanMapPage() {
     stores.forEach(s=>{if(s.omset!=null&&s.omset>0) m[s.customer_code]=Number(s.omset)})
     return m
   },[stores])
+
+  // sales_person_name → warna teritori (konsisten dgn peta & panel per-sales)
+  const salesColorByName = useMemo(()=>{
+    const m:Record<string,string>={}
+    divResults.forEach(dr=>dr.territories.forEach(t=>{
+      m[t.sales_name]=TERRITORY_COLORS[t.sales_index%TERRITORY_COLORS.length]
+    }))
+    return m
+  },[divResults])
 
   const visibleStores = useMemo(()=>{
     if (selectedSales) {
@@ -725,6 +856,7 @@ export default function PlanMapPage() {
           planInfo={planInfo} divResults={divResults} omsetByCode={omsetByCode}
           selectedSales={selectedSales} onSelectSales={setSelectedSales}
           onHide={()=>setRightHidden(true)}
+          coverage={coverage} salesColor={salesColorByName}
         />
       )}
     </div>

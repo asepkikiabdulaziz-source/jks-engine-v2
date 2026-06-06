@@ -62,6 +62,11 @@
   --radius-full:    9999px;
 
   /* Spacing */
+  /* ⚠ GOTCHA: token --spacing-{xs,sm,md,lg,xl} ini menyerobot resolusi utility
+     max-width Tailwind v4 → `.max-w-xl { max-width: var(--spacing-xl) }` = 32px,
+     BUKAN 36rem. Jadi max-w-{xs,sm,md,lg,xl} TIDAK BISA dipakai untuk lebar.
+     Untuk lebar pakai arbitrary `max-w-[36rem]` atau inline style maxWidth.
+     (max-w-2xl dst aman karena tak ada token --spacing-2xl.) */
   --spacing-xs:             4px;
   --spacing-sm:             8px;
   --spacing-md:             16px;

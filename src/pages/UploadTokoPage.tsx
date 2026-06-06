@@ -18,6 +18,8 @@ interface ValidationError {
   row: number
   field: string
   message: string
+  code?: string   // customer_code baris yang di-skip (jika sudah terbaca)
+  name?: string   // customer_name baris yang di-skip (jika sudah terbaca)
 }
 
 interface ParseResult {
@@ -117,13 +119,13 @@ function parseExcel(file: File): Promise<ParseResult> {
           const lat = parseFloat(String(r.latitude ?? ''))
           const lon = parseFloat(String(r.longitude ?? ''))
 
-          if (!code) { errors.push({ row: rowNum, field: 'customer_code', message: 'Kosong' }); return }
-          if (!name) { errors.push({ row: rowNum, field: 'customer_name', message: 'Kosong' }); return }
-          if (isNaN(lat)) { errors.push({ row: rowNum, field: 'latitude', message: 'Bukan angka' }); return }
-          if (isNaN(lon)) { errors.push({ row: rowNum, field: 'longitude', message: 'Bukan angka' }); return }
-          if (lat < -11 || lat > 6) { errors.push({ row: rowNum, field: 'latitude', message: `${lat} di luar range Indonesia (-11..6)` }); return }
-          if (lon < 95 || lon > 141) { errors.push({ row: rowNum, field: 'longitude', message: `${lon} di luar range Indonesia (95..141)` }); return }
-          if (seenCodes.has(code)) { errors.push({ row: rowNum, field: 'customer_code', message: `Duplikat dalam file: ${code}` }); return }
+          if (!code) { errors.push({ row: rowNum, field: 'customer_code', message: 'Kosong', code, name }); return }
+          if (!name) { errors.push({ row: rowNum, field: 'customer_name', message: 'Kosong', code, name }); return }
+          if (isNaN(lat)) { errors.push({ row: rowNum, field: 'latitude', message: 'Bukan angka', code, name }); return }
+          if (isNaN(lon)) { errors.push({ row: rowNum, field: 'longitude', message: 'Bukan angka', code, name }); return }
+          if (lat < -11 || lat > 6) { errors.push({ row: rowNum, field: 'latitude', message: `${lat} di luar range Indonesia (-11..6)`, code, name }); return }
+          if (lon < 95 || lon > 141) { errors.push({ row: rowNum, field: 'longitude', message: `${lon} di luar range Indonesia (95..141)`, code, name }); return }
+          if (seenCodes.has(code)) { errors.push({ row: rowNum, field: 'customer_code', message: `Duplikat dalam file: ${code}`, code, name }); return }
           seenCodes.add(code)
 
           rows.push({
@@ -196,6 +198,120 @@ function downloadTemplate() {
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Stores')
   XLSX.writeFile(wb, 'template_toko.xlsx')
+}
+
+// ── Panel baris dilewati saat parsing (ringkas + tombol Detail → modal) ────────
+function SkippedRowsPanel({
+  errors, fileName, title,
+}: {
+  errors  : ValidationError[]
+  fileName: string
+  title   : string
+}) {
+  const [open, setOpen] = React.useState(false)
+  if (errors.length === 0) return null
+
+  function downloadSkipped() {
+    const headers = ['baris', 'customer_code', 'customer_name', 'kolom', 'alasan']
+    const rows = errors.map(e => [e.row, e.code ?? '', e.name ?? '', e.field, e.message])
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+    ws['!cols'] = [{ wch: 8 }, { wch: 16 }, { wch: 36 }, { wch: 16 }, { wch: 48 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Baris Dilewati')
+    const base = fileName.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_')
+    XLSX.writeFile(wb, `${base}_baris_dilewati.xlsx`)
+  }
+
+  return (
+    <>
+      {/* Panel ringkas */}
+      <div className="rounded-lg border p-md flex items-center gap-sm"
+           style={{ borderColor: 'rgba(186,26,26,0.2)', background: 'rgba(255,218,214,0.15)' }}>
+        <span className="material-symbols-outlined text-error" style={{ fontSize: 16 }}>error</span>
+        <p className="font-label-md text-label-md text-error flex-1">{title}</p>
+        <button
+          onClick={() => setOpen(true)}
+          className="px-sm py-[3px] rounded text-[11px] font-semibold border transition-colors hover:bg-error/10 shrink-0"
+          style={{ borderColor: 'rgba(186,26,26,0.3)', color: '#ba1a1a' }}
+        >
+          Detail
+        </button>
+      </div>
+
+      {/* Modal daftar baris dilewati */}
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-lg"
+             style={{ background: 'rgba(0,0,0,0.45)' }}
+             onClick={(e) => { if (e.target === e.currentTarget) setOpen(false) }}>
+          <div className="bg-surface-container-lowest rounded-xl shadow-2xl w-full flex flex-col"
+               style={{ maxWidth: '42rem', maxHeight: '80vh' }}>
+
+            {/* Header */}
+            <div className="flex items-start gap-md p-lg border-b border-secondary/10 shrink-0">
+              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+                   style={{ background: 'rgba(186,26,26,0.1)' }}>
+                <span className="material-symbols-outlined" style={{ color: '#ba1a1a', fontSize: 20 }}>error</span>
+              </div>
+              <div className="flex-1">
+                <p className="font-headline-md text-headline-md text-primary">Baris Dilewati Saat Parsing</p>
+                <p className="font-body-sm text-body-sm text-on-surface-variant">
+                  {errors.length} baris tidak ikut disimpan — perbaiki di file Excel lalu upload ulang
+                </p>
+              </div>
+              <button onClick={() => setOpen(false)}
+                      className="p-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors">
+                <span className="material-symbols-outlined" style={{ fontSize: 20 }}>close</span>
+              </button>
+            </div>
+
+            {/* Tabel */}
+            <div className="flex-1 overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead style={{ background: '#f7f9fb', position: 'sticky', top: 0 }}>
+                  <tr>
+                    <th className="px-3 py-2 text-left font-label-md text-label-md text-on-surface-variant w-14">Baris</th>
+                    <th className="px-3 py-2 text-left font-label-md text-label-md text-on-surface-variant">Kode</th>
+                    <th className="px-3 py-2 text-left font-label-md text-label-md text-on-surface-variant">Nama Toko</th>
+                    <th className="px-3 py-2 text-left font-label-md text-label-md text-on-surface-variant">Kolom</th>
+                    <th className="px-3 py-2 text-left font-label-md text-label-md text-on-surface-variant">Alasan</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {errors.map((e, i) => (
+                    <tr key={i} className="border-t border-secondary/10 hover:bg-surface-container-low transition-colors">
+                      <td className="px-3 py-2 font-data-mono text-data-mono">{e.row}</td>
+                      <td className="px-3 py-2 font-data-mono text-data-mono">{e.code || '—'}</td>
+                      <td className="px-3 py-2 font-body-sm text-body-sm">{e.name || '—'}</td>
+                      <td className="px-3 py-2 font-data-mono text-data-mono text-on-surface-variant">{e.field}</td>
+                      <td className="px-3 py-2 font-body-sm text-body-sm" style={{ color: '#ba1a1a' }}>{e.message}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-sm p-lg border-t border-secondary/10 shrink-0">
+              <button
+                onClick={() => setOpen(false)}
+                className="px-lg py-sm rounded-lg border border-secondary/20 font-label-md text-label-md text-on-surface-variant hover:bg-surface-container transition-colors"
+              >
+                Tutup
+              </button>
+              <button
+                onClick={downloadSkipped}
+                className="flex items-center gap-sm px-lg py-sm rounded-lg font-label-md text-label-md text-on-primary transition-colors"
+                style={{ background: '#ba1a1a' }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 16 }}>download</span>
+                Download Excel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
 }
 
 // idle   → user belum upload
@@ -471,27 +587,12 @@ export default function UploadTokoPage() {
                     </div>
                   </div>
 
-                  {/* Validation errors (collapsed) */}
-                  {parseResult.errors.length > 0 && (
-                    <div className="rounded-lg border p-md" style={{ borderColor: 'rgba(186,26,26,0.2)', background: 'rgba(255,218,214,0.15)' }}>
-                      <div className="flex items-center gap-sm mb-sm">
-                        <span className="material-symbols-outlined text-error" style={{ fontSize: 16 }}>error</span>
-                        <p className="font-label-md text-label-md text-error">
-                          {parseResult.errors.length} baris tidak valid (tidak akan diupload)
-                        </p>
-                      </div>
-                      <div className="max-h-24 overflow-y-auto space-y-0.5">
-                        {parseResult.errors.slice(0, 10).map((e, i) => (
-                          <p key={i} className="font-body-sm text-body-sm text-error">
-                            Baris {e.row} · <code className="font-data-mono">{e.field}</code>: {e.message}
-                          </p>
-                        ))}
-                        {parseResult.errors.length > 10 && (
-                          <p className="font-body-sm text-body-sm text-error">... dan {parseResult.errors.length - 10} lainnya</p>
-                        )}
-                      </div>
-                    </div>
-                  )}
+                  {/* Validation errors → panel ringkas + modal Detail */}
+                  <SkippedRowsPanel
+                    errors={parseResult.errors}
+                    fileName={fileName}
+                    title={`${parseResult.errors.length} baris tidak valid (tidak akan diupload)`}
+                  />
 
                   {/* Geocoding progress */}
                   <div className="flex flex-col items-center py-xl gap-md">
@@ -550,26 +651,13 @@ export default function UploadTokoPage() {
                     )
                   })()}
 
-                  {/* Baris di-skip saat parsing (tetap terlihat di langkah keputusan) */}
-                  {parseResult && parseResult.errors.length > 0 && (
-                    <div className="rounded-lg border p-md" style={{ borderColor: 'rgba(186,26,26,0.2)', background: 'rgba(255,218,214,0.15)' }}>
-                      <div className="flex items-center gap-sm mb-sm">
-                        <span className="material-symbols-outlined text-error" style={{ fontSize: 16 }}>error</span>
-                        <p className="font-label-md text-label-md text-error flex-1">
-                          {parseResult.errors.length} dari {parseResult.totalRaw} baris dilewati saat parsing (tidak ikut disimpan)
-                        </p>
-                      </div>
-                      <div className="max-h-24 overflow-y-auto space-y-0.5">
-                        {parseResult.errors.slice(0, 10).map((e, i) => (
-                          <p key={i} className="font-body-sm text-body-sm text-error">
-                            Baris {e.row} · <code className="font-data-mono">{e.field}</code>: {e.message}
-                          </p>
-                        ))}
-                        {parseResult.errors.length > 10 && (
-                          <p className="font-body-sm text-body-sm text-error">... dan {parseResult.errors.length - 10} lainnya</p>
-                        )}
-                      </div>
-                    </div>
+                  {/* Baris di-skip saat parsing → panel ringkas + modal Detail */}
+                  {parseResult && (
+                    <SkippedRowsPanel
+                      errors={parseResult.errors}
+                      fileName={fileName}
+                      title={`${parseResult.errors.length} dari ${parseResult.totalRaw} baris dilewati saat parsing (tidak ikut disimpan)`}
+                    />
                   )}
 
                   {/* Distribusi kecamatan — selalu tampil jika ada data geocoded */}
@@ -760,9 +848,15 @@ function GeocodeSummary({
     XLSX.writeFile(wb, `${base}_${kecName}.xlsx`)
   }
 
+  // Mencurigakan (toko ≤ 2) selalu tampil & dipin ke atas; limit hanya untuk baris normal
   const SHOW = 10
-  const shown  = summary.slice(0, SHOW)
-  const hidden = summary.length - SHOW
+  const normal      = summary.filter(r => r.jumlah > 2)
+  const shownNormal = normal.slice(0, SHOW)
+  const hidden      = normal.length - shownNormal.length
+  const displayRows = [
+    ...suspicious.map(r  => ({ r, isSusp: true,  num: 0     })),
+    ...shownNormal.map((r, i) => ({ r, isSusp: false, num: i + 1 })),
+  ]
 
   return (
     <>
@@ -799,8 +893,7 @@ function GeocodeSummary({
               </tr>
             </thead>
             <tbody>
-              {shown.map((r, i) => {
-                const isSusp = r.jumlah <= 2
+              {displayRows.map(({ r, isSusp, num }, i) => {
                 return (
                   <tr key={i}
                       className={`border-t transition-colors ${isSusp ? '' : 'hover:bg-surface-container-low'}`}
@@ -812,7 +905,7 @@ function GeocodeSummary({
                         style={{ color: isSusp ? '#ba1a1a' : undefined }}>
                       {isSusp
                         ? <span className="material-symbols-outlined" style={{ fontSize: 12, verticalAlign: 'middle' }}>warning</span>
-                        : i + 1
+                        : num
                       }
                     </td>
                     <td className="px-3 py-1 font-body-sm text-body-sm"
@@ -863,8 +956,8 @@ function GeocodeSummary({
         <div className="fixed inset-0 z-50 flex items-center justify-center p-lg"
              style={{ background: 'rgba(0,0,0,0.45)' }}
              onClick={(e) => { if (e.target === e.currentTarget) setSelectedKec(null) }}>
-          <div className="bg-surface-container-lowest rounded-xl shadow-2xl w-full max-w-xl flex flex-col"
-               style={{ maxHeight: '80vh' }}>
+          <div className="bg-surface-container-lowest rounded-xl shadow-2xl w-full flex flex-col"
+               style={{ maxWidth: '36rem', maxHeight: '80vh' }}>
 
             {/* Modal header */}
             <div className="flex items-start gap-md p-lg border-b border-secondary/10 shrink-0">
