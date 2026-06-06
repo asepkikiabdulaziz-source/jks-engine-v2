@@ -574,7 +574,11 @@ export default function UploadTokoPage() {
 
                   {/* Distribusi kecamatan — selalu tampil jika ada data geocoded */}
                   {(stagingResult.summary ?? []).length > 0 && (
-                    <GeocodeSummary summary={stagingResult.summary} geocoded={stagingResult.geocoded} />
+                    <GeocodeSummary
+                      summary={stagingResult.summary}
+                      geocoded={stagingResult.geocoded}
+                      fileName={fileName}
+                    />
                   )}
 
                   {/* Review tabs: Tidak Masuk GADM + Koordinat Mencurigakan */}
@@ -718,30 +722,72 @@ export default function UploadTokoPage() {
 
 // --- Sub-components ---
 
-function GeocodeSummary({ summary, geocoded }: { summary: KecamatanSummaryRow[]; geocoded: number }) {
-  const SHOW = 8
-  const shown  = summary.slice(0, SHOW)
-  const hidden = summary.length - SHOW
-  const uniqueKota = [...new Set(summary.map(r => r.name_2).filter(Boolean))].length
+function downloadKecamatanMencurigakan(
+  suspicious: KecamatanSummaryRow[],
+  sourceFileName: string,
+) {
+  if (suspicious.length === 0) return
+  const headers = ['Provinsi', 'Kab/Kota', 'Kecamatan', 'Jumlah Toko', '%', 'Catatan']
+  const rows = suspicious.map(r => [
+    r.name_1, r.name_2, r.name_3, r.jumlah, r.pct,
+    'Kecamatan dengan terlalu sedikit toko — kemungkinan koordinat meleset ke kecamatan yang salah',
+  ])
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+  ws['!cols'] = [{ wch: 22 }, { wch: 24 }, { wch: 24 }, { wch: 14 }, { wch: 8 }, { wch: 60 }]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Kecamatan Mencurigakan')
+  const base = sourceFileName.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_')
+  XLSX.writeFile(wb, `${base}_kecamatan_mencurigakan.xlsx`)
+}
+
+function GeocodeSummary({
+  summary, geocoded, fileName,
+}: {
+  summary  : KecamatanSummaryRow[]
+  geocoded : number
+  fileName : string
+}) {
+  const suspicious  = summary.filter(r => r.jumlah <= 2)   // kecamatan mencurigakan — selalu tampil semua
+  const normal      = summary.filter(r => r.jumlah > 2)
+  const SHOW_NORMAL = 6
+  const shownNormal  = normal.slice(0, SHOW_NORMAL)
+  const hiddenNormal = normal.length - SHOW_NORMAL
+  const uniqueKota   = [...new Set(summary.map(r => r.name_2).filter(Boolean))].length
 
   return (
     <div className="rounded-lg border overflow-hidden" style={{ borderColor: 'rgba(80,95,118,0.15)' }}>
-      {/* Header */}
+
+      {/* ── Header ── */}
       <div className="flex items-center gap-sm px-md py-sm"
            style={{ background: '#f2f4f6', borderBottom: '1px solid rgba(80,95,118,0.1)' }}>
         <span className="material-symbols-outlined" style={{ fontSize: 14, color: '#0c9488' }}>map</span>
-        <p className="text-xs font-semibold text-on-surface-variant flex-1">
-          Distribusi Geocoding
-        </p>
+        <p className="text-xs font-semibold text-on-surface-variant flex-1">Distribusi Geocoding</p>
+        {suspicious.length > 0 && (
+          <>
+            <span className="flex items-center gap-[3px] px-[6px] py-[2px] rounded-full text-[10px] font-bold mr-sm"
+                  style={{ background: 'rgba(186,26,26,0.12)', color: '#ba1a1a' }}>
+              <span className="material-symbols-outlined" style={{ fontSize: 11 }}>warning</span>
+              {suspicious.length} kecamatan mencurigakan
+            </span>
+            <button
+              onClick={() => downloadKecamatanMencurigakan(suspicious, fileName)}
+              className="flex items-center gap-[4px] px-sm py-[3px] rounded text-[11px] font-semibold border transition-colors hover:bg-error/5 mr-sm"
+              style={{ borderColor: 'rgba(186,26,26,0.3)', color: '#ba1a1a', background: 'rgba(255,255,255,0.85)' }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 13 }}>download</span>
+              Download
+            </button>
+          </>
+        )}
         <span className="text-[11px] text-on-surface-variant">
           {geocoded} toko · {summary.length} kecamatan · {uniqueKota} kab/kota
         </span>
       </div>
 
-      {/* Tabel distribusi */}
-      <div className="max-h-52 overflow-y-auto">
+      {/* ── Tabel ── */}
+      <div className="max-h-56 overflow-y-auto">
         <table className="w-full text-xs">
-          <thead style={{ background: '#f7f9fb', position: 'sticky', top: 0 }}>
+          <thead style={{ background: '#f7f9fb', position: 'sticky', top: 0, zIndex: 1 }}>
             <tr>
               <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant w-8">#</th>
               <th className="px-3 py-1.5 text-left font-label-md text-label-md text-on-surface-variant">Kecamatan</th>
@@ -751,8 +797,34 @@ function GeocodeSummary({ summary, geocoded }: { summary: KecamatanSummaryRow[];
             </tr>
           </thead>
           <tbody>
-            {shown.map((r, i) => (
-              <tr key={i} className="border-t border-secondary/10 hover:bg-surface-container-low transition-colors">
+            {/* Suspicious rows — selalu tampil, di atas */}
+            {suspicious.map((r, i) => (
+              <tr key={`s${i}`} className="border-t"
+                  style={{ borderColor: 'rgba(186,26,26,0.15)', background: 'rgba(255,218,214,0.25)' }}>
+                <td className="px-3 py-1 font-data-mono text-data-mono" style={{ color: '#ba1a1a' }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 11, verticalAlign: 'middle' }}>warning</span>
+                </td>
+                <td className="px-3 py-1 font-body-sm text-body-sm font-semibold" style={{ color: '#ba1a1a' }}>
+                  {r.name_3 || '—'}
+                </td>
+                <td className="px-3 py-1 font-body-sm text-body-sm" style={{ color: '#ba1a1a' }}>{r.name_2 || '—'}</td>
+                <td className="px-3 py-1 text-right font-data-mono text-data-mono font-bold" style={{ color: '#ba1a1a' }}>{r.jumlah}</td>
+                <td className="px-3 py-1 text-right font-data-mono text-data-mono" style={{ color: '#ba1a1a' }}>{r.pct}%</td>
+              </tr>
+            ))}
+
+            {/* Divider jika ada keduanya */}
+            {suspicious.length > 0 && shownNormal.length > 0 && (
+              <tr style={{ background: '#f2f4f6' }}>
+                <td colSpan={5} className="px-3 py-[3px] text-[10px] text-on-surface-variant uppercase tracking-wide">
+                  Kecamatan normal
+                </td>
+              </tr>
+            )}
+
+            {/* Normal rows */}
+            {shownNormal.map((r, i) => (
+              <tr key={`n${i}`} className="border-t border-secondary/10 hover:bg-surface-container-low transition-colors">
                 <td className="px-3 py-1 text-on-surface-variant font-data-mono text-data-mono">{i + 1}</td>
                 <td className="px-3 py-1 font-body-sm text-body-sm text-primary">{r.name_3 || '—'}</td>
                 <td className="px-3 py-1 font-body-sm text-body-sm text-on-surface-variant">{r.name_2 || '—'}</td>
@@ -760,10 +832,10 @@ function GeocodeSummary({ summary, geocoded }: { summary: KecamatanSummaryRow[];
                 <td className="px-3 py-1 text-right font-data-mono text-data-mono text-on-surface-variant">{r.pct}%</td>
               </tr>
             ))}
-            {hidden > 0 && (
+            {hiddenNormal > 0 && (
               <tr className="border-t border-secondary/10">
                 <td colSpan={5} className="px-3 py-1.5 text-center text-[11px] text-on-surface-variant italic">
-                  ... dan {hidden} kecamatan lainnya
+                  ... dan {hiddenNormal} kecamatan lainnya
                 </td>
               </tr>
             )}
