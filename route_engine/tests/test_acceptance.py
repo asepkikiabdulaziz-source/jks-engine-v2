@@ -10,8 +10,6 @@ from pathlib import Path
 
 import pytest
 
-from route_engine.core.geo import haversine, bearing, centroid
-from route_engine.core.scheduling import slice_by_bearing
 from route_engine.core import partition as partition_mod
 from route_engine.engine import RouteEngine
 from route_engine.models import Cycle, Philosophy, VisitFrequency
@@ -26,10 +24,6 @@ def _serialize(assignments):
     rows = [dataclasses.asdict(a) for a in assignments]
     rows.sort(key=lambda r: (r["sales_person_name"], r["day_index"], r["visit_order"], r["customer_code"]))
     return rows
-
-
-def _bearing_order(stores, center):
-    return sorted(stores, key=lambda s: (bearing(center[0], center[1], s.latitude, s.longitude), s.customer_code))
 
 
 def _run_blocks(assignments):
@@ -96,56 +90,26 @@ def test_preflight_rejects_missing_required(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# [ ] Hari berurutan melingkar: batas sudut antar-hari monoton; hari terakhir
-#     bertetangga hari pertama (by construction dari slice_by_bearing)
+# [ ] Hari = clump K-Means padat per sales (BLOCKING murni K-Means): per sales,
+#     work_days hari di-split KMeansConstrained → tiap hari dalam [min,max] bound.
 # --------------------------------------------------------------------------- #
-def test_slice_by_bearing_circular_contiguous(stores_300):
-    center = centroid([s.coord for s in stores_300])
-    n = 6
-    labels = slice_by_bearing(stores_300, center, n)
-    ordered = _bearing_order(stores_300, center)
-    seq = [labels[s.customer_code] for s in ordered]
+def test_blocking_days_balanced(stores_300, config_blocking):
+    from route_engine.core.scheduling import build_blocking
+    from route_engine.core.partition import _count_bounds
 
-    # tepat n_slices run kontigu → tidak ada label muncul di dua arc terpisah
-    transitions = sum(1 for i in range(1, len(seq)) if seq[i] != seq[i - 1])
-    assert transitions == n - 1
-    assert set(seq) == set(range(n))
-    # arc menutup: label pertama & terakhir bertetangga melingkar (0 dan n-1)
-    assert seq[0] == 0 and seq[-1] == n - 1
-
-
-def test_days_circular_in_plan(stores_300, config_blocking):
-    eng = RouteEngine()
-    plan = eng.run(stores_300, config_blocking, plan_id="P1")
-    # untuk tiap sales (BLOCKING), hari membentuk irisan pai kontigu di sekitar centroid sales
+    placement = build_blocking(stores_300, config_blocking)  # {code -> (sales, day0)}
+    wd = config_blocking.work_days
     by_sales = defaultdict(list)
-    for a in plan.assignments:
-        by_sales[a.sales_person_name].append(a)
-    for sales, rows in by_sales.items():
-        stores = [partition_store(plan, a.customer_code) for a in rows]
-        center = centroid([s.coord for s in stores])
-        ordered = sorted(zip(rows, stores), key=lambda rs: bearing(center[0], center[1], rs[1].latitude, rs[1].longitude))
-        seq = [r.day_index for r, _ in ordered]
-        runs = sum(1 for i in range(1, len(seq)) if seq[i] != seq[i - 1])
-        # jumlah run = jumlah hari distinct - 1 (tiap hari satu arc kontigu)
-        assert runs == len(set(seq)) - 1
+    for _code, (sales_idx, day_idx) in placement.items():
+        by_sales[sales_idx].append(day_idx)
 
-
-def partition_store(plan, code):
-    return plan._store_index[code]
-
-
-# --------------------------------------------------------------------------- #
-# [ ] Kerataan jumlah: selisih cacah toko antar-hari ≤ 10% (disepakati)
-# --------------------------------------------------------------------------- #
-def test_day_count_evenness(stores_300):
-    center = centroid([s.coord for s in stores_300])
-    n = 6
-    labels = slice_by_bearing(stores_300, center, n)
-    counts = Counter(labels.values())
-    avg = len(stores_300) / n
-    spread = max(counts.values()) - min(counts.values())
-    assert spread <= max(1, math.ceil(0.10 * avg))
+    for sales_idx, days in by_sales.items():
+        assert all(0 <= d < wd for d in days)            # day_index0 valid
+        counts = Counter(days)
+        if len(days) >= wd:
+            assert len(counts) == wd                     # semua hari terisi
+            size_min, size_max = _count_bounds(len(days), wd, config_blocking.balance_tolerance)
+            assert all(size_min <= c <= size_max for c in counts.values())
 
 
 # --------------------------------------------------------------------------- #

@@ -13,7 +13,7 @@ route_engine/
     geo.py             haversine, bearing, centroid            (SALVAGE math lama)
     qc.py              gross_outlier_check, stacked_coordinate_check  (SATU-SATUNYA pemakai GADM)
     partition.py       balanced_partition (+ fallback wajib)
-    scheduling.py      slice_by_bearing, build_blocking, build_traffic
+    scheduling.py      build_blocking, build_traffic            (murni K-Means)
     biweekly.py        split_ganjil_genap (selang-seling sepanjang tur)
     estimator.py       nn_tour, nn_tour_length, load_score      (pintu tunggal beban)
     summary.py         build_summary (count DAN est_route_length)
@@ -50,7 +50,7 @@ plan.lock_routes()                    # GATE 2: rute beku
 - **No fail-closed**: hapus `k-means-constrained` → tetap jalan via fallback.
 - **Murni lokal**: tidak ada network di jalur logic (haversine saja).
 - **GADM hanya di `core/qc.py`** — tripwire kualitas data, bukan input logic.
-- **Berurutan melingkar by-construction** via `slice_by_bearing`.
+- **Penempatan hari murni K-Means** (clump padat per sales) — BLOCKING & TRAFFIC.
 
 ## Test
 

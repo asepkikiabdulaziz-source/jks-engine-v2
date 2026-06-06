@@ -55,8 +55,8 @@ Display: `salesLabel()` di RoutingEnginePage → `TX2DA-SLS-01`
 |------|-----------|
 | `api.py` | FastAPI entry point (ROOT) |
 | `route_engine/engine.py` | RouteEngine class — `partition_sales()` + `run()` |
-| `route_engine/core/scheduling.py` | `slice_by_bearing`, `build_blocking`, `build_traffic` |
-| `route_engine/core/partition.py` | `balanced_partition` (K-Means + fallback) |
+| `route_engine/core/scheduling.py` | `build_blocking`, `build_traffic` (penempatan hari murni K-Means) |
+| `route_engine/core/partition.py` | `balanced_partition` (KMeansConstrained, fail-loud) |
 | `src/pages/RoutingEnginePage.tsx` | Halaman utama — peta + panel + adjustment |
 | `src/context/AreaContext.tsx` | State area aktif (Region → Cabang → Area) |
 | `supabase/functions/generate-plan/index.ts` | Edge Function (path alternatif, belum dipakai) |

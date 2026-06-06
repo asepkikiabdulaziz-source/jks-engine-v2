@@ -53,7 +53,6 @@ from route_engine.core.biweekly import split_ganjil_genap
 from route_engine.core.estimator import nn_tour
 from route_engine.core.geo import centroid
 from route_engine.core.partition import balanced_partition
-from route_engine.core.scheduling import slice_by_bearing
 
 logger = logging.getLogger(__name__)
 
@@ -511,7 +510,7 @@ def _build_from_territories(
     Skip K-Means — langsung ke assignment dari territories yang ada.
 
     BLOCKING (territories = wilayah sales):
-      Setiap territory → slice_by_bearing → day blocks.
+      Setiap territory → balanced_partition (K-Means) → day blocks.
 
     TRAFFIC (territories = hari-zones, hasil partition_days()):
       Setiap territory → balanced_partition(n_sales) → sales blocks per hari.
@@ -553,9 +552,13 @@ def _build_from_territories(
                 for s in t_stores:
                     blocks[(0, day_idx)].append(s)
         else:
-            # BLOCKING: territory = wilayah sales → slice hari via bearing
-            ctr        = (ct_lat, ct_lon)
-            day_labels = slice_by_bearing(t_stores, ctr, work_days)
+            # BLOCKING: territory = wilayah sales → split hari murni K-Means
+            day_labels = balanced_partition(
+                t_stores, work_days,
+                criterion=BalanceCriterion.COUNT,
+                random_state=42,
+                tolerance=balance_tolerance,
+            )
             for s in t_stores:
                 blocks[(t.sales_index, day_labels[s.customer_code])].append(s)
 

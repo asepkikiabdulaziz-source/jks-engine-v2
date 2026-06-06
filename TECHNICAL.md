@@ -111,7 +111,7 @@ jks-v2/
 │   ├── requirements-api.txt        # fastapi, uvicorn, supabase, dll.
 │   ├── core/
 │   │   ├── partition.py            # balanced_partition (K-Means)
-│   │   ├── scheduling.py           # slice_by_bearing, build_blocking, build_traffic
+│   │   ├── scheduling.py           # build_blocking, build_traffic (murni K-Means)
 │   │   ├── biweekly.py             # split_ganjil_genap (M2)
 │   │   ├── estimator.py            # nn_tour (nearest-neighbor sequencing)
 │   │   ├── geo.py                  # bearing, centroid, haversine
@@ -291,8 +291,8 @@ selectedSales: SelectedSales | null          // panel kanan filter
 
 `_build_from_territories()` adalah shared helper antara `/stage2` dan `/generate-plan`:
 1. Per territory, ambil Store objects dari store_map
-2. `centroid()` wilayah → center untuk `slice_by_bearing`
-3. `slice_by_bearing(stores, center, work_days)` → day assignments
+2. BLOCKING: `balanced_partition(stores, work_days)` → day clusters (murni K-Means)
+3. TRAFFIC: `balanced_partition(stores, n_sales)` per hari → sales clusters
 4. `nn_tour()` per blok (sales, hari) → urutan optimal
 5. `split_ganjil_genap()` jika M2
 
@@ -377,10 +377,10 @@ Data polygon wilayah dari GADM diimpor ke `gadm_regions`.
 Semua toko area
       ↓
 [K-Means balanced_partition] → N sales
-  (toleransi ±10%, fallback slice_by_bearing jika K-Means gagal)
+  (toleransi ±10%, fail-loud tanpa fallback)
       ↓
-Per sales: [slice_by_bearing dari centroid wilayah sales]
-  → work_days irisan pie
+Per sales: [K-Means balanced_partition] → work_days hari
+  → tiap hari = clump padat (murni K-Means)
       ↓
 Per blok (sales, hari): [nn_tour] → urutan kunjungan
       ↓
@@ -392,25 +392,25 @@ Jika M2: [split_ganjil_genap] → toko ganjil vs genap
 ```
 Semua toko area
       ↓
-[slice_by_bearing dari depo] → work_days hari global
+[K-Means balanced_partition] → work_days hari global
       ↓
 Per hari: [balanced_partition] → N sales
       ↓
 Per blok (sales, hari): [nn_tour] + [split_ganjil_genap]
 ```
 
-### 7.3 slice_by_bearing
+### 7.3 Pembagian hari (murni K-Means)
 
-Algoritma kunci untuk jaminan hari berurutan melingkar:
-1. Hitung bearing (0°–360°) tiap toko dari center
-2. Sort by (bearing, customer_code) — deterministik
-3. Potong N irisan equal-count → irisan berurutan melingkar by construction
+Baik BLOCKING maupun TRAFFIC memakai `balanced_partition` (KMeansConstrained)
+untuk membentuk hari — tiap hari = clump toko padat. Penomoran hari deterministik
+via `_canonical_remap` (urut bearing centroid → label stabil). Metode irisan-sudut
+lama (bearing-slice) sudah dihapus total.
 
 ### 7.4 balanced_partition
 
-1. KMeans(n_clusters=n_sales, random_state=42) dari koordinat
-2. Cek toleransi kerataan: `max_count / avg_count ≤ 1 + tolerance`
-3. Jika tidak merata: fallback ke `slice_by_bearing` dari depo
+1. KMeansConstrained(n_clusters=n, size_min/size_max dari toleransi ±X%)
+2. Validasi bounds; bila dilanggar → RuntimeError (fail-loud, BUKAN fallback)
+3. Remap label ke urutan bearing centroid (penomoran deterministik)
 
 ### 7.5 M2 Biweekly Split (split_ganjil_genap)
 
