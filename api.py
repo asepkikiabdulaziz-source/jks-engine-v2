@@ -33,6 +33,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from supabase import Client, create_client
 
+# Preflight: verifikasi dependency REQUIRED SEBELUM mengimpor engine, agar
+# kegagalan tampil sebagai pesan jelas (bukan ImportError mentah dari modul engine).
+# Worker menolak boot bila ada yang hilang — crash terlihat > menyimpang senyap.
+from route_engine.core.preflight import verify_dependencies
+verify_dependencies()
+
 # Absolute imports — api.py ada di root, bukan di dalam package route_engine/
 from route_engine.engine import RouteEngine, SalesTerritory, SalesPartition
 from route_engine.models import (

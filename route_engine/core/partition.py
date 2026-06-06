@@ -2,15 +2,11 @@
 # core/partition.py  —  Partisi toko ke N sales (BLOCKING Stage 1)
 # ==============================================================================
 #
-# Algoritma utama : KMeansConstrained (balanced K-Means, kompak secara spasial)
-# Fallback        : Recursive Median Bisection (pure Python, balance sempurna)
-#
-# Recursive Median Bisection:
-#   1. Hitung axis terpanjang (lat atau lon) dari bounding box stores
-#   2. Potong di median (sort → ambil tengah) → 2 kelompok
-#   3. Ulangi rekursif tiap kelompok sampai N kelompok terbentuk
-#   Hasil: kelompok persegi panjang kompak, balance COUNT sempurna (selisih ≤1),
-#   deterministik, tanpa library tambahan.
+# Algoritma : KMeansConstrained (balanced K-Means, kompak secara spasial).
+#             REQUIRED — diverifikasi saat startup via core/preflight.py.
+#             TIDAK ADA fallback algoritma alternatif: bila absen → engine menolak
+#             start; bila error runtime → propagate (crash). Lebih baik crash
+#             terlihat daripada menyimpang senyap ke algoritma lain (Prinsip 1 & 3).
 #
 # Toleransi KMeans: ±tolerance dari rata-rata (default 0.10 = ±10%).
 # Deterministik: stores di-sort by customer_code sebelum diolah;
@@ -26,10 +22,7 @@ from .geo import bearing, centroid
 from ..constants import BALANCE_TOLERANCE
 from ..models import BalanceCriterion
 
-try:
-    from k_means_constrained import KMeansConstrained
-except Exception:
-    KMeansConstrained = None  # fallback aktif jika library tidak terpasang
+from k_means_constrained import KMeansConstrained  # REQUIRED — diverifikasi via preflight
 
 
 # ── Batas ukuran cluster untuk KMeans ─────────────────────────────────────────
@@ -85,50 +78,6 @@ def _valid(labels: List[int], n: int, size_min: int, size_max: int) -> bool:
     return all(size_min <= c <= size_max for c in counts)
 
 
-# ── Fallback: Recursive Median Bisection ──────────────────────────────────────
-
-def _recursive_bisection(items: List, n: int) -> Dict[str, int]:
-    """
-    Crash guard — pure Python, tidak butuh library tambahan.
-
-    Potong di median axis terpanjang secara rekursif sampai N kelompok.
-    Balance by COUNT sempurna (selisih antar-kelompok ≤ 1).
-    Deterministik: sort by customer_code sebelum bisect agar tie-break stabil.
-
-    Label 0..n-1 diurutkan berdasarkan centroid kelompok (bearing dari centroid
-    global) supaya penomoran sales konsisten dengan output KMeans.
-    """
-    def _bisect(subset: List, k: int) -> List[List]:
-        """Rekursif: kembalikan list k sub-list."""
-        if k == 1:
-            return [subset]
-        lat_range = max(s.coord[0] for s in subset) - min(s.coord[0] for s in subset)
-        lon_range = max(s.coord[1] for s in subset) - min(s.coord[1] for s in subset)
-        axis = 0 if lat_range >= lon_range else 1  # 0=lat, 1=lon
-        sorted_sub = sorted(subset, key=lambda s: (s.coord[axis], s.customer_code))
-        mid     = len(sorted_sub) // 2
-        k_left  = k // 2
-        k_right = k - k_left
-        return _bisect(sorted_sub[:mid], k_left) + _bisect(sorted_sub[mid:], k_right)
-
-    groups = _bisect(items, n)
-
-    # Remap ke label terurut bearing dari centroid global (konsisten dengan KMeans)
-    global_ct = centroid([s.coord for s in items])
-    keyed = []
-    for grp_idx, grp in enumerate(groups):
-        ct  = centroid([s.coord for s in grp])
-        ang = bearing(global_ct[0], global_ct[1], ct[0], ct[1])
-        keyed.append((ang, grp_idx, grp))
-    keyed.sort()
-
-    result: Dict[str, int] = {}
-    for new_label, (_, _, grp) in enumerate(keyed):
-        for s in grp:
-            result[s.customer_code] = new_label
-    return result
-
-
 # ── API publik ─────────────────────────────────────────────────────────────────
 
 def balanced_partition(
@@ -157,26 +106,27 @@ def balanced_partition(
     coords = [s.coord for s in items]
     size_min, size_max = _count_bounds(n_total, n, tolerance)
 
-    # ── KMeansConstrained (jalur utama) ───────────────────────────────────────
-    if KMeansConstrained is not None:
-        try:
-            import numpy as np
-            X = np.asarray(coords, dtype=float)
-            raw = KMeansConstrained(
-                n_clusters=n,
-                size_min=size_min,
-                size_max=size_max,
-                random_state=random_state,
-            ).fit_predict(X)
-            raw = [int(x) for x in raw]
-            if _valid(raw, n, size_min, size_max):
-                new_labels = _canonical_remap(raw, coords, n)
-                return {items[i].customer_code: new_labels[i] for i in range(n_total)}
-        except Exception:
-            pass  # library bermasalah → fallback
-
-    # ── Fallback: Recursive Median Bisection (pure Python) ───────────────────
-    return _recursive_bisection(items, n)
+    # ── KMeansConstrained — jalur TUNGGAL (REQUIRED, tanpa fallback senyap) ────
+    # Error apa pun dibiarkan propagate: lebih baik crash terlihat daripada
+    # diam-diam beralih ke algoritma lain (Prinsip 1 & 3).
+    import numpy as np
+    X = np.asarray(coords, dtype=float)
+    raw = KMeansConstrained(
+        n_clusters=n,
+        size_min=size_min,
+        size_max=size_max,
+        random_state=random_state,
+    ).fit_predict(X)
+    raw = [int(x) for x in raw]
+    if not _valid(raw, n, size_min, size_max):
+        # KMeansConstrained menjamin bounds; bila tetap dilanggar ada masalah
+        # fundamental — gagalkan dengan konteks, jangan sembunyikan.
+        raise RuntimeError(
+            f"KMeansConstrained: partisi di luar bounds [{size_min},{size_max}] "
+            f"(n={n}, total={n_total}). Crash > menyimpang senyap."
+        )
+    new_labels = _canonical_remap(raw, coords, n)
+    return {items[i].customer_code: new_labels[i] for i in range(n_total)}
 
 
 __all__ = ["balanced_partition", "KMeansConstrained"]

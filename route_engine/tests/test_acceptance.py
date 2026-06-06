@@ -68,24 +68,31 @@ def test_determinism_shuffled_input(stores_300, config_blocking):
 
 
 # --------------------------------------------------------------------------- #
-# [ ] No fail-closed: blokir k-means-constrained → tetap jalan via fallback
+# [ ] Fail-loud (bukan fail-silent): dep REQUIRED hilang → crash, BUKAN diam-diam
+#     beralih ke algoritma lain. (Prinsip dibalik dari "no fail-closed".)
 # --------------------------------------------------------------------------- #
-def test_no_fail_closed(stores_300, config_blocking, monkeypatch):
+def test_fail_loud_not_silent_deviation(stores_300, config_blocking, monkeypatch):
     eng = RouteEngine()
-    baseline = eng.run(stores_300, config_blocking, plan_id="P1")
+    # Sanity: jalur normal menghasilkan plan
+    eng.run(stores_300, config_blocking, plan_id="P1")
 
-    # Simulasi library absen
+    # Simulasi KMeansConstrained tak tersedia → HARUS crash; tidak boleh
+    # menghasilkan partisi via algoritma alternatif diam-diam.
     monkeypatch.setattr(partition_mod, "KMeansConstrained", None, raising=False)
-    fallback = eng.run(stores_300, config_blocking, plan_id="P1")
+    with pytest.raises(Exception):
+        eng.run(stores_300, config_blocking, plan_id="P1")
 
-    # Tidak crash, semua toko tetap ter-assign
-    assert len(fallback.assignments) == len(stores_300)
-    codes = {a.customer_code for a in fallback.assignments}
-    assert codes == {s.customer_code for s in stores_300}
 
-    # Fallback juga deterministik
-    fallback2 = eng.run(stores_300, config_blocking, plan_id="P1")
-    assert _serialize(fallback.assignments) == _serialize(fallback2.assignments)
+def test_preflight_rejects_missing_required(monkeypatch):
+    """preflight.verify_dependencies() menolak start bila dep REQUIRED absen."""
+    from route_engine.core import preflight
+
+    monkeypatch.setattr(
+        preflight, "REQUIRED",
+        [("paket-hantu", "modul_yang_tidak_ada_xyz", "uji")],
+    )
+    with pytest.raises(RuntimeError, match="MENOLAK START"):
+        preflight.verify_dependencies()
 
 
 # --------------------------------------------------------------------------- #

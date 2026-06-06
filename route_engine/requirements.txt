@@ -1,12 +1,16 @@
 # JKS Route Engine v2 — dependencies
 #
-# core/ (geo, qc, scheduling, biweekly, estimator, summary) + engine.py berjalan
-# TANPA dependency eksternal apa pun (pure stdlib) — sesuai guardrail §2.2/§2.4.
+# SEMUA library di bawah REQUIRED — tidak ada tier "opsional".
+# Filosofi engine (determinisme, partisi terbalance, biweekly geografis) berdiri
+# di atas library ini. Bila salah satu absen, engine MENOLAK START via preflight
+# (route_engine/core/preflight.py) — lebih baik crash keras saat boot daripada
+# menyimpang senyap ke algoritma lain saat runtime. Lihat spec §2 (Prinsip 2).
 #
-# OPSIONAL — hanya meningkatkan kualitas DRAFT partisi (core/partition.py).
-# Bila absen, engine tetap jalan via fallback slice_by_bearing (no fail-closed).
-k-means-constrained>=0.7.0   # optional: balanced clustering untuk draft partisi
-numpy>=1.24                  # optional: dibutuhkan oleh k-means-constrained
+# Versi DI-PIN (==) demi determinisme reproducible: input sama → output sama,
+# termasuk antar-build. Naikkan versi hanya dengan verifikasi ulang acceptance test.
+numpy==1.26.3                # komputasi koordinat (partition, biweekly)
+scikit-learn==1.8.0          # KMeans 2-cluster biweekly M2 (core/biweekly.py)
+k-means-constrained==0.7.3   # partisi sales terbalance Stage 1 (core/partition.py)
 
 # dev / test
 pytest>=7.0

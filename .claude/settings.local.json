@@ -5,7 +5,17 @@
       "mcp__claude_ai_Supabase__apply_migration",
       "Bash(npx tsc *)",
       "Bash(cd /d D:\\\\PROJECT\\\\jks-v2)",
-      "Bash(python -m pytest route_engine/tests -q)"
+      "Bash(python -m pytest route_engine/tests -q)",
+      "Bash(findstr /c:\".env\")",
+      "Bash(Select-String \"\\\\.env\")",
+      "Bash(Get-ChildItem -Path \"D:\\\\PROJECT\\\\jks-v2\\\\route_engine\" -Recurse -File)",
+      "Bash(Select-Object FullName)",
+      "Bash(Get-ChildItem -Path \"d:\\\\PROJECT\\\\jks-v2\" -Recurse -Depth 2)",
+      "Bash(git log *)",
+      "Bash(npm list *)",
+      "Bash(cd /d \"D:\\\\PROJECT\\\\jks-v2\")",
+      "Bash(python -m pytest route_engine/tests/test_acceptance.py -v)",
+      "Bash(python -m pip list)"
     ]
   }
 }
