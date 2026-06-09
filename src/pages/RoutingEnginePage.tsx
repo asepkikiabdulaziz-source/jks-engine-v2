@@ -99,6 +99,16 @@ interface DivisionState {
   error?      : string
 }
 
+// Snapshot untuk undo/redo — payload yang bisa diedit manual per divisi
+interface DivSnapshot {
+  territories?: Territory[]
+  schedule?   : SalesSchedule[]
+}
+interface DivHistory {
+  past   : DivSnapshot[]
+  future : DivSnapshot[]
+}
+
 interface SelectedDayFilter {
   day_of_week   : string
   customer_codes: string[]
@@ -385,25 +395,18 @@ function StoreInfoCard({ sel, territories, schedule, philosophy, onReassign, onC
           {canReassign && (
             <div style={{ borderTop: '1px solid rgba(80,95,118,0.08)', paddingTop: 8 }}>
               <p className="text-[10px] font-semibold text-on-surface-variant mb-xs">Pindahkan ke:</p>
-              <div className="flex gap-xs flex-wrap">
+              <select value="" onChange={e => { if (e.target.value) onReassign(e.target.value) }}
+                      className="w-full text-xs font-semibold rounded-lg px-sm py-[6px] outline-none cursor-pointer"
+                      style={{ border: '1px solid rgba(80,95,118,0.25)', color: '#1f2937', background: '#fff' }}>
+                <option value="">pilih salesperson…</option>
                 {territories
                   .filter(t => t.sales_name !== currentSales)
                   .map(t => {
-                    const color = isTraffic
-                      ? (DAY_COLORS[t.sales_name] ?? TERRITORY_COLORS[t.sales_index % TERRITORY_COLORS.length])
-                      : TERRITORY_COLORS[t.sales_index % TERRITORY_COLORS.length]
                     const label = isTraffic ? t.sales_name : salesLabel(t.sales_name)
-                    return (
-                      <button key={t.sales_name} onClick={() => onReassign(t.sales_name)}
-                              className="flex items-center gap-[4px] px-sm py-[4px] rounded-lg border text-[11px] font-semibold transition-colors"
-                              style={{ borderColor: `${color}55`, color, background: `${color}0d` }}>
-                        <span className="material-symbols-outlined" style={{ fontSize: 11 }}>arrow_forward</span>
-                        {label}
-                      </button>
-                    )
+                    return <option key={t.sales_name} value={t.sales_name}>{label}</option>
                   })
                 }
-              </div>
+              </select>
               <p className="text-[9px] text-on-surface-variant mt-[6px] flex items-center gap-[4px]">
                 <kbd className="px-[4px] py-[1px] rounded text-[9px] font-data-mono"
                      style={{ background: 'rgba(80,95,118,0.1)', border: '1px solid rgba(80,95,118,0.2)' }}>Ctrl</kbd>
@@ -440,16 +443,111 @@ function StoreInfoCard({ sel, territories, schedule, philosophy, onReassign, onC
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// S2MovePicker — picker Hari × Pekan untuk pindah toko (s2_preview, Tahap 3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const S2_MOVE_DAYS = ['Senin','Selasa','Rabu','Kamis','Jumat','Sabtu']
+const S2_PATTERNS: Array<{key:'M1'|'M2C13'|'M2C24'; label:string; color:string}> = [
+  { key:'M1',    label:'M1 · tiap pekan', color:'#0c9488' },
+  { key:'M2C13', label:'M2C13 · ganjil',  color:WEEK_GANJIL_COLOR },
+  { key:'M2C24', label:'M2C24 · genap',   color:WEEK_GENAP_COLOR },
+]
+
+function S2MovePicker({ divId, selList, schedule, onApply }: {
+  divId    : string
+  selList  : StorePoint[]
+  schedule : SalesSchedule[]
+  onApply  : (divId:string, codes:string[], day:string, pattern:'M1'|'M2C13'|'M2C24') => void
+}) {
+  const codes  = useMemo(()=>selList.map(s=>s.customer_code), [selList])
+  const selSet = useMemo(()=>new Set(codes), [codes])
+  // Hari & pola toko terpilih SAAT INI → default picker (kalau seragam)
+  const cur = useMemo(()=>{
+    const days=new Set<string>(), pats=new Set<string>()
+    for (const ss of schedule) for (const d of ss.days) for (const c of d.customer_codes) {
+      if (!selSet.has(c)) continue
+      days.add(d.day_of_week)
+      pats.add(d.ganjil_codes.includes(c) ? 'M2C13' : d.genap_codes.includes(c) ? 'M2C24' : 'M1')
+    }
+    return {
+      day: days.size===1 ? [...days][0] : null,
+      pat: pats.size===1 ? ([...pats][0] as 'M1'|'M2C13'|'M2C24') : null,
+    }
+  }, [schedule, selSet])
+
+  const [pickDay,setPickDay] = useState<string|null>(null)
+  const [pickPat,setPickPat] = useState<'M1'|'M2C13'|'M2C24'|null>(null)
+  const effDay = pickDay ?? cur.day
+  const effPat = pickPat ?? cur.pat
+
+  // Berapa toko yang frekuensinya jadi beda dari visit_frequency-nya
+  const freqWarn = useMemo(()=>{
+    if (!effPat) return 0
+    let n=0
+    for (const s of selList) {
+      const weekly=(s.visit_frequency??'').toUpperCase()==='WEEKLY'
+      if ((weekly && effPat!=='M1') || (!weekly && effPat==='M1')) n++
+    }
+    return n
+  }, [selList, effPat])
+
+  const changed = !!effDay && !!effPat && (effDay!==cur.day || effPat!==cur.pat)
+
+  return (
+    <>
+      <div className="w-px h-5 shrink-0" style={{ background:'rgba(255,255,255,0.15)' }}/>
+      <label className="flex items-center gap-[4px] shrink-0">
+        <span className="text-[10px]" style={{ color:'rgba(255,255,255,0.45)' }}>Hari</span>
+        <select value={effDay ?? ''} onChange={e=>setPickDay(e.target.value)}
+                className="text-[11px] font-semibold rounded-md px-[6px] py-[4px] outline-none cursor-pointer"
+                style={{ background:'rgba(255,255,255,0.14)', color:'#fff', border:'1px solid rgba(255,255,255,0.22)' }}>
+          {!effDay && <option value="" disabled style={{ color:'#111' }}>pilih…</option>}
+          {S2_MOVE_DAYS.map(d=>(
+            <option key={d} value={d} style={{ color:'#111' }}>{d}</option>
+          ))}
+        </select>
+      </label>
+      <label className="flex items-center gap-[4px] shrink-0">
+        <span className="text-[10px]" style={{ color:'rgba(255,255,255,0.45)' }}>Pekan</span>
+        <select value={effPat ?? ''} onChange={e=>setPickPat(e.target.value as 'M1'|'M2C13'|'M2C24')}
+                className="text-[11px] font-semibold rounded-md px-[6px] py-[4px] outline-none cursor-pointer"
+                style={{ background:'rgba(255,255,255,0.14)', color:'#fff', border:'1px solid rgba(255,255,255,0.22)' }}>
+          {!effPat && <option value="" disabled style={{ color:'#111' }}>pilih…</option>}
+          {S2_PATTERNS.map(p=>(
+            <option key={p.key} value={p.key} style={{ color:'#111' }}>{p.label}</option>
+          ))}
+        </select>
+      </label>
+      {freqWarn>0 && (
+        <span className="text-[10px] flex items-center gap-[3px] shrink-0" style={{ color:'#fbbf24' }}
+              title="Pola pekan berbeda dari visit_frequency toko">
+          <span className="material-symbols-outlined" style={{ fontSize:12 }}>warning</span>
+          {freqWarn}
+        </span>
+      )}
+      <button onClick={()=>{ if(effDay&&effPat) onApply(divId,codes,effDay,effPat) }}
+              disabled={!changed}
+              className="flex items-center gap-[4px] px-sm py-[4px] rounded-lg text-[11px] font-bold transition-all disabled:opacity-30 shrink-0"
+              style={{ background:'#7c3aed', color:'#fff' }}>
+        <span className="material-symbols-outlined" style={{ fontSize:13 }}>arrow_forward</span>
+        Pindahkan
+      </button>
+    </>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MultiSelectBar — floating pill saat Ctrl+klik beberapa toko
 // ─────────────────────────────────────────────────────────────────────────────
 
-function MultiSelectBar({ selectedCodes, stores, omsetByCode, divisionStates, divisions, onReassignAll, onClear }: {
+function MultiSelectBar({ selectedCodes, stores, omsetByCode, divisionStates, divisions, onReassignAll, onApplyMove, onClear }: {
   selectedCodes  : Set<string>
   stores         : StorePoint[]
   omsetByCode    : Record<string,number>
   divisionStates : Map<string,DivisionState>
   divisions      : DivisionConfig[]
   onReassignAll  : (divId:string, newSalesName:string) => void
+  onApplyMove    : (divId:string, codes:string[], day:string, pattern:'M1'|'M2C13'|'M2C24') => void
   onClear        : () => void
 }) {
   const selList    = stores.filter(s => selectedCodes.has(s.customer_code))
@@ -462,6 +560,7 @@ function MultiSelectBar({ selectedCodes, stores, omsetByCode, divisionStates, di
   const territories= divState?.territories ?? []
   const canReassign= singleDiv !== null && divState?.stage === 's1_done' && territories.length > 1
   const isTraffic  = singleDiv ? divisions.find(d => d.id === singleDiv)?.philosophy === 'TRAFFIC' : false
+  const isS2       = singleDiv !== null && divState?.stage === 's2_preview' && !!divState?.schedule
 
   return (
     <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-[900] flex items-center gap-sm px-sm py-[8px] rounded-2xl shadow-2xl select-none"
@@ -486,30 +585,30 @@ function MultiSelectBar({ selectedCodes, stores, omsetByCode, divisionStates, di
         </>
       )}
 
-      {/* Reassign targets */}
+      {/* Pindah hari/pekan (s2_preview, Tahap 3) */}
+      {isS2 && divState && divState.schedule && (
+        <S2MovePicker divId={singleDiv!} selList={selList} schedule={divState.schedule} onApply={onApplyMove} />
+      )}
+
+      {/* Reassign targets → dropdown */}
       {canReassign && (
         <>
           <div className="w-px h-5 shrink-0" style={{ background:'rgba(255,255,255,0.15)' }}/>
-          <span className="text-[10px] shrink-0" style={{ color:'rgba(255,255,255,0.45)' }}>Pindahkan ke</span>
-          <div className="flex gap-[4px] flex-wrap">
-            {territories.map(t => {
-              // Sembunyikan jika semua toko yg dipilih sudah ada di territory ini
-              const allHere = selList.every(s => t.customer_codes.includes(s.customer_code))
-              if (allHere) return null
-              const color = isTraffic
-                ? (DAY_COLORS[t.sales_name] ?? TERRITORY_COLORS[t.sales_index % TERRITORY_COLORS.length])
-                : TERRITORY_COLORS[t.sales_index % TERRITORY_COLORS.length]
-              const label = isTraffic ? t.sales_name : salesLabel(t.sales_name)
-              return (
-                <button key={t.sales_name}
-                        onClick={() => onReassignAll(singleDiv!, t.sales_name)}
-                        className="flex items-center gap-[3px] px-[8px] py-[3px] rounded-full text-[11px] font-bold transition-all hover:scale-105 active:scale-95 shrink-0"
-                        style={{ background:`${color}22`, border:`1px solid ${color}55`, color:'#fff' }}>
-                  {label}
-                </button>
-              )
-            })}
-          </div>
+          <label className="flex items-center gap-[4px] shrink-0">
+            <span className="text-[10px]" style={{ color:'rgba(255,255,255,0.45)' }}>Pindahkan ke</span>
+            <select value="" onChange={e=>{ if(e.target.value) onReassignAll(singleDiv!, e.target.value) }}
+                    className="text-[11px] font-semibold rounded-md px-[6px] py-[4px] outline-none cursor-pointer"
+                    style={{ background:'rgba(255,255,255,0.14)', color:'#fff', border:'1px solid rgba(255,255,255,0.22)' }}>
+              <option value="" style={{ color:'#111' }}>pilih sales…</option>
+              {territories.map(t => {
+                // Sembunyikan jika semua toko yg dipilih sudah ada di territory ini
+                const allHere = selList.every(s => t.customer_codes.includes(s.customer_code))
+                if (allHere) return null
+                const label = isTraffic ? t.sales_name : salesLabel(t.sales_name)
+                return <option key={t.sales_name} value={t.sales_name} style={{ color:'#111' }}>{label}</option>
+              })}
+            </select>
+          </label>
         </>
       )}
 
@@ -1480,10 +1579,11 @@ export default function RoutingEnginePage() {
   const [selectedStore,  setSelectedStore]  = useState<SelectedStore|null>(null)
   const [multiSelected,  setMultiSelected]  = useState<Set<string>>(new Set())
   const [selectedRegions,setSelectedRegions]= useState<Set<string>>(new Set())  // tab Wilayah → filter peta (multi)
+  const [editHistory,    setEditHistory]    = useState<Map<string,DivHistory>>(new Map())  // undo/redo per divisi
 
   // ── Load stores ──────────────────────────────────────────────────────────
   useEffect(() => {
-    setStores([]); setDivisions([]); setDivisionStates(new Map())
+    setStores([]); setDivisions([]); setDivisionStates(new Map()); setEditHistory(new Map())
     setSelectedSales(null); setSelectedStore(null); setMultiSelected(new Set()); setSelectedRegions(new Set())
     setSummaryViewMode('sales')
     if (!areaId) { setStoresLoading(false); return }
@@ -1509,14 +1609,62 @@ export default function RoutingEnginePage() {
   function updateDivisionParam(id:string,patch:Partial<Pick<DivisionConfig,'n_sales'|'work_days'|'cycle'|'philosophy'|'balance_tolerance'>>) {
     setDivisions(prev=>prev.map(d=>d.id===id?{...d,...patch}:d))
     setDivisionStates(prev=>{ const cur=prev.get(id); if(!cur||cur.stage==='idle') return prev; return new Map(prev).set(id,{stage:'idle'}) })
+    resetDivHistory(id)
     setSelectedSales(prev=>prev?.divId===id?null:prev)
   }
   function toggleExpand(id:string) { setDivisions(prev=>prev.map(d=>({...d,expanded:d.id===id?!d.expanded:false}))) }
   function resetDivision(id:string) {
     setDivisionStates(prev=>new Map(prev).set(id,{stage:'idle'}))
+    resetDivHistory(id)
     setSelectedSales(prev=>prev?.divId===id?null:prev)
     setSelectedStore(prev=>prev?.divId===id?null:prev)
     setMultiSelected(new Set())
+  }
+
+  // ── Undo/redo: SATU sistem untuk semua modul adjustment manual ─────────
+  // Reassign sales (popup/ctrl-klik/wilayah) + edit hari/pekan semuanya lewat
+  // commitDivEdit → otomatis terekam. Snapshot {territories, schedule} per divisi.
+  function commitDivEdit(divId:string, before:DivisionState, after:DivisionState) {
+    setEditHistory(h=>{
+      const cur=h.get(divId)??{past:[],future:[]}
+      return new Map(h).set(divId,{ past:[...cur.past,{territories:before.territories,schedule:before.schedule}], future:[] })
+    })
+    setDivisionStates(prev=>new Map(prev).set(divId,after))
+  }
+  function resetDivHistory(divId:string) {
+    setEditHistory(h=>{ if(!h.has(divId)) return h; const n=new Map(h); n.delete(divId); return n })
+  }
+  // Segarkan code-list di selectedSales dari schedule terbaru (anti tampilan basi).
+  function refreshSelectedSales(sel:SelectedSales|null, schedule:SalesSchedule[]|undefined): SelectedSales|null {
+    if (!sel || !schedule) return sel
+    if (sel.dayViewSalesMap) return null   // per-hari view: rebuild non-trivial → clear demi aman
+    const ss = schedule.find(s=>s.sales_name===sel.salesName)
+    if (!ss) return null
+    const dayMap = Object.fromEntries(ss.days.map(d=>[d.day_of_week,d.customer_codes]))
+    if (sel.dayFilter) {
+      const day = ss.days.find(d=>d.day_of_week===sel.dayFilter!.day_of_week)
+      if (!day) return { ...sel, dayMap, dayFilter:undefined }
+      return { ...sel, dayMap, dayFilter:{ ...sel.dayFilter, customer_codes:day.customer_codes, ganjil_codes:day.ganjil_codes, genap_codes:day.genap_codes } }
+    }
+    return { ...sel, dayMap }
+  }
+  function undoDiv(divId:string) {
+    const hist=editHistory.get(divId); const cur=divisionStates.get(divId)
+    if(!hist||hist.past.length===0||!cur) return
+    const snap=hist.past[hist.past.length-1]
+    setEditHistory(h=>{ const hh=h.get(divId)??{past:[],future:[]}; return new Map(h).set(divId,{ past:hh.past.slice(0,-1), future:[...hh.future,{territories:cur.territories,schedule:cur.schedule}] }) })
+    setDivisionStates(ds=>new Map(ds).set(divId,{...cur,territories:snap.territories,schedule:snap.schedule}))
+    setSelectedSales(prev=>prev?.divId===divId?refreshSelectedSales(prev,snap.schedule):prev)
+    setSelectedStore(null); setMultiSelected(new Set())
+  }
+  function redoDiv(divId:string) {
+    const hist=editHistory.get(divId); const cur=divisionStates.get(divId)
+    if(!hist||hist.future.length===0||!cur) return
+    const snap=hist.future[hist.future.length-1]
+    setEditHistory(h=>{ const hh=h.get(divId)??{past:[],future:[]}; return new Map(h).set(divId,{ past:[...hh.past,{territories:cur.territories,schedule:cur.schedule}], future:hh.future.slice(0,-1) }) })
+    setDivisionStates(ds=>new Map(ds).set(divId,{...cur,territories:snap.territories,schedule:snap.schedule}))
+    setSelectedSales(prev=>prev?.divId===divId?refreshSelectedSales(prev,snap.schedule):prev)
+    setSelectedStore(null); setMultiSelected(new Set())
   }
 
   // ── Store click (popup / multi-select) ───────────────────────────────
@@ -1561,7 +1709,7 @@ export default function RoutingEnginePage() {
       return t
     })
 
-    setDivisionStates(prev => new Map(prev).set(fromDivId, { ...cur, territories: newTerritories }))
+    commitDivEdit(fromDivId, cur, { ...cur, territories: newTerritories })
     // Update popup agar reflect salesperson baru
     setSelectedStore(prev => prev ? { ...prev } : null)
   }
@@ -1584,7 +1732,7 @@ export default function RoutingEnginePage() {
       const filtered = t.customer_codes.filter(c => !codeSet.has(c))
       return { ...t, customer_codes: filtered, store_count: filtered.length }
     })
-    setDivisionStates(prev => new Map(prev).set(divId, { ...cur, territories: newTerritories }))
+    commitDivEdit(divId, cur, { ...cur, territories: newTerritories })
     setMultiSelected(new Set())
   }
 
@@ -1602,7 +1750,65 @@ export default function RoutingEnginePage() {
       const filtered = t.customer_codes.filter(c => !codeSet.has(c))
       return { ...t, customer_codes: filtered, store_count: filtered.length }
     })
-    setDivisionStates(prev => new Map(prev).set(divId, { ...cur, territories: newTerritories }))
+    commitDivEdit(divId, cur, { ...cur, territories: newTerritories })
+  }
+
+  // ── Pindah hari/pekan toko dalam satu sales (Tahap 3, s2_preview) ──────
+  // targetPattern: 'M1' (tiap pekan) | 'M2C13' (ganjil) | 'M2C24' (genap).
+  // Toko TETAP di sales asalnya — hanya hari & pola pekan yang berubah.
+  function applyMove(divId: string, codes: string[], targetDay: string, targetPattern: 'M1'|'M2C13'|'M2C24') {
+    const cur = divisionStates.get(divId)
+    if (!cur?.schedule || cur.stage !== 's2_preview') return
+    const moveSet = new Set(codes)
+    if (moveSet.size === 0) return
+
+    // Clone schedule (arrays) agar mutasi tak menyentuh snapshot lama (untuk undo)
+    const sched: SalesSchedule[] = cur.schedule.map(ss => ({
+      sales_name: ss.sales_name,
+      days: ss.days.map(d => ({
+        day_of_week   : d.day_of_week,
+        store_count   : d.store_count,
+        customer_codes: [...d.customer_codes],
+        ganjil_codes  : [...d.ganjil_codes],
+        genap_codes   : [...d.genap_codes],
+      })),
+    }))
+
+    // Sales asal tiap kode (pindah tetap dalam sales yang sama)
+    const salesOfCode = new Map<string,string>()
+    sched.forEach(ss => ss.days.forEach(d => d.customer_codes.forEach(c => { if (moveSet.has(c)) salesOfCode.set(c, ss.sales_name) })))
+
+    // 1. Cabut kode dari posisi lama
+    sched.forEach(ss => ss.days.forEach(d => {
+      d.customer_codes = d.customer_codes.filter(c => !moveSet.has(c))
+      d.ganjil_codes   = d.ganjil_codes.filter(c => !moveSet.has(c))
+      d.genap_codes    = d.genap_codes.filter(c => !moveSet.has(c))
+    }))
+
+    // 2. Taruh di hari tujuan dengan pola tujuan (dalam sales asal)
+    moveSet.forEach(code => {
+      const sn = salesOfCode.get(code); if (!sn) return
+      const ss = sched.find(s => s.sales_name === sn); if (!ss) return
+      let day = ss.days.find(d => d.day_of_week === targetDay)
+      if (!day) { day = { day_of_week: targetDay, store_count: 0, customer_codes: [], ganjil_codes: [], genap_codes: [] }; ss.days.push(day) }
+      if (!day.customer_codes.includes(code)) day.customer_codes.push(code)
+      if (targetPattern === 'M2C13') day.ganjil_codes.push(code)
+      else if (targetPattern === 'M2C24') day.genap_codes.push(code)
+      // M1 → tidak masuk ganjil/genap (ganjil = genap = true di engine)
+    })
+
+    // 3. Rapikan: store_count, urut hari, buang hari kosong
+    sched.forEach(ss => {
+      ss.days.forEach(d => { d.store_count = d.customer_codes.length })
+      ss.days = ss.days
+        .filter(d => d.customer_codes.length > 0)
+        .sort((a,b) => DAY_ORDER.indexOf(a.day_of_week) - DAY_ORDER.indexOf(b.day_of_week))
+    })
+
+    commitDivEdit(divId, cur, { ...cur, schedule: sched })
+    setSelectedSales(prev => prev?.divId===divId ? refreshSelectedSales(prev, sched) : prev)
+    setMultiSelected(new Set())
+    setSelectedStore(null)
   }
 
   // ── Stage 1 ────────────────────────────────────────────────────────────
@@ -1625,6 +1831,7 @@ export default function RoutingEnginePage() {
       const result=data.results.find(r=>r.div_sls===divSls)
       if(!result) throw new Error('Hasil tidak ditemukan')
       setDivisionStates(prev=>new Map(prev).set(divSls,{stage:'s1_done',territories:result.territories}))
+      resetDivHistory(divSls)   // mulai sesi edit baru
       setRightHidden(false)   // buka panel kanan otomatis
     } catch(e) {
       setDivisionStates(prev=>new Map(prev).set(divSls,{stage:'idle',error:e instanceof Error?e.message:String(e)}))
@@ -1666,6 +1873,7 @@ export default function RoutingEnginePage() {
       if(!resp.ok){const b=await resp.json().catch(()=>({}));throw new Error(b.detail??`HTTP ${resp.status}`)}
       const result:{div_sls:string;territories:Territory[];schedule:SalesSchedule[]}=await resp.json()
       setDivisionStates(prev=>new Map(prev).set(divId,{stage:'s2_preview',territories:result.territories,schedule:result.schedule}))
+      resetDivHistory(divId)   // sesi edit jadwal baru (tak bisa undo tembus regenerate)
       setRightHidden(false)
     } catch(e) {
       setDivisionStates(prev=>{ const c=prev.get(divId); return new Map(prev).set(divId,{stage:c?.territories?'s1_done':'idle',territories:c?.territories,error:e instanceof Error?e.message:String(e)}) })
@@ -1701,6 +1909,19 @@ export default function RoutingEnginePage() {
                 sales_name:t.sales_name,
                 customer_codes:t.customer_codes,
               })) ?? null,
+              // Jadwal hasil edit manual hari/pekan — HANYA bila ada editan;
+              // engine pakai apa adanya (skip penjadwalan ulang)
+              schedule_override: ((editHistory.get(d.id)?.past.length ?? 0) > 0 && st?.schedule)
+                ? st.schedule.map(ss=>({
+                    sales_name: ss.sales_name,
+                    days: ss.days.map(dy=>({
+                      day_of_week:    dy.day_of_week,
+                      customer_codes: dy.customer_codes,
+                      ganjil_codes:   dy.ganjil_codes,
+                      genap_codes:    dy.genap_codes,
+                    })),
+                  }))
+                : null,
             }
           })}),
         signal:AbortSignal.timeout(120_000)})
@@ -1718,6 +1939,30 @@ export default function RoutingEnginePage() {
 
   // ── Active div (expanded in left panel) ───────────────────────────────
   const activeDivId = divisions.find(d=>d.expanded)?.id??null
+
+  // ── Undo/redo: divisi yang difokuskan + status + listener keyboard ─────
+  const focusedDivId = selectedSales?.divId ?? activeDivId ?? (divisions.length===1 ? divisions[0].id : null)
+  const focusHist    = focusedDivId ? editHistory.get(focusedDivId) : undefined
+  const canUndo      = (focusHist?.past.length   ?? 0) > 0
+  const canRedo      = (focusHist?.future.length ?? 0) > 0
+  const undoRedoRef  = useRef({ undo:()=>{}, redo:()=>{}, canUndo:false, canRedo:false })
+  undoRedoRef.current = {
+    undo: ()=>{ if(focusedDivId) undoDiv(focusedDivId) },
+    redo: ()=>{ if(focusedDivId) redoDiv(focusedDivId) },
+    canUndo, canRedo,
+  }
+  useEffect(()=>{
+    function onKey(e:KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey)) return
+      const tgt = e.target as HTMLElement | null
+      if (tgt && (tgt.tagName==='INPUT' || tgt.tagName==='TEXTAREA' || tgt.isContentEditable)) return
+      const k = e.key.toLowerCase()
+      if (k==='z' && !e.shiftKey) { if (undoRedoRef.current.canUndo) { e.preventDefault(); undoRedoRef.current.undo() } }
+      else if ((k==='z' && e.shiftKey) || k==='y') { if (undoRedoRef.current.canRedo) { e.preventDefault(); undoRedoRef.current.redo() } }
+    }
+    window.addEventListener('keydown', onKey)
+    return ()=>window.removeEventListener('keydown', onKey)
+  },[])
 
   // ── Panel kanan visible? ───────────────────────────────────────────────
   const hasRightData = divisions.some(d=>divisionStates.get(d.id)?.territories?.length)
@@ -1918,8 +2163,29 @@ export default function RoutingEnginePage() {
           divisionStates={divisionStates}
           divisions={divisions}
           onReassignAll={handleMultiReassign}
+          onApplyMove={applyMove}
           onClear={() => setMultiSelected(new Set())}
         />
+      )}
+
+      {/* ── Undo / Redo (semua adjustment manual) ─── */}
+      {(canUndo||canRedo) && multiSelected.size===0 && (
+        <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-[850] flex items-center gap-[2px] px-[4px] py-[4px] rounded-xl shadow-2xl select-none"
+             style={{ background:'rgba(15,23,42,0.88)', border:'1px solid rgba(255,255,255,0.1)', backdropFilter:'blur(12px)' }}>
+          <button onClick={()=>focusedDivId&&undoDiv(focusedDivId)} disabled={!canUndo} title="Urungkan (Ctrl+Z)"
+                  className="flex items-center gap-[4px] px-sm py-[5px] rounded-lg text-[11px] font-semibold transition-colors disabled:opacity-30 enabled:hover:bg-white/10"
+                  style={{ color:'#fff' }}>
+            <span className="material-symbols-outlined" style={{ fontSize:15 }}>undo</span>
+            Urungkan
+          </button>
+          <div className="w-px h-4 shrink-0" style={{ background:'rgba(255,255,255,0.15)' }}/>
+          <button onClick={()=>focusedDivId&&redoDiv(focusedDivId)} disabled={!canRedo} title="Ulangi (Ctrl+Shift+Z)"
+                  className="flex items-center gap-[4px] px-sm py-[5px] rounded-lg text-[11px] font-semibold transition-colors disabled:opacity-30 enabled:hover:bg-white/10"
+                  style={{ color:'#fff' }}>
+            <span className="material-symbols-outlined" style={{ fontSize:15 }}>redo</span>
+            Ulangi
+          </button>
+        </div>
       )}
 
       {/* Overlay saat sales dipilih */}

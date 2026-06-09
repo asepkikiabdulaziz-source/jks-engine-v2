@@ -201,6 +201,25 @@ class TerritoryIn(BaseModel):
     customer_codes : List[str]
 
 
+class ScheduleDayIn(BaseModel):
+    """Satu hari dalam schedule_override (hasil edit manual hari/pekan di s2_preview).
+
+    Keanggotaan pekan menentukan pola kunjungan tiap toko:
+      - di ganjil_codes  → M2C13 (kunjungi pekan ganjil)
+      - di genap_codes   → M2C24 (kunjungi pekan genap)
+      - hanya di customer_codes → M1 (kunjungi tiap pekan)
+    """
+    day_of_week    : str
+    customer_codes : List[str]
+    ganjil_codes   : List[str] = []
+    genap_codes    : List[str] = []
+
+
+class SalesScheduleIn(BaseModel):
+    sales_name : str
+    days       : List[ScheduleDayIn]
+
+
 class DivisionIn(BaseModel):
     div_sls:           str
     n_sales:           int   = Field(..., ge=1, le=200)
@@ -211,6 +230,9 @@ class DivisionIn(BaseModel):
     # Optional: pre-assigned territories dari Stage 1 + adjustment
     # Jika disediakan, K-Means partitioning di-skip; langsung ke day scheduling
     territories: Optional[List[TerritoryIn]] = None
+    # Optional: jadwal hasil edit manual hari/pekan (s2_preview). Jika ada,
+    # penempatan hari/pekan diambil apa adanya dari sini (skip K-Means hari).
+    schedule_override: Optional[List[SalesScheduleIn]] = None
 
 
 class GeneratePlanRequest(BaseModel):
@@ -343,21 +365,32 @@ def generate_plan(
         if div.territories:
             vid = str(uuid.uuid4())
             store_map = {s.customer_code: s for s in stores}
-            t_out, s_out, a_dicts = _build_from_territories(
-                store_map         = store_map,
-                territories       = div.territories,
-                n_sales           = div.n_sales,
-                work_days         = div.work_days,
-                cycle             = div.cycle,
-                philosophy        = div.philosophy,
-                depo_lat          = req.depo_lat,
-                depo_lon          = req.depo_lon,
-                kd_dist           = req.kd_dist,
-                div_sls           = div.div_sls,
-                plan_id           = f"{plan_id}-{div.div_sls}",
-                version_id        = vid,
-                balance_tolerance = div.balance_tolerance,
-            )
+            if div.schedule_override:
+                # Edit manual hari/pekan (s2_preview) → pakai jadwal apa adanya
+                t_out, s_out, a_dicts = _build_from_override(
+                    store_map         = store_map,
+                    territories       = div.territories,
+                    schedule_override = div.schedule_override,
+                    philosophy        = div.philosophy,
+                    div_sls           = div.div_sls,
+                    version_id        = vid,
+                )
+            else:
+                t_out, s_out, a_dicts = _build_from_territories(
+                    store_map         = store_map,
+                    territories       = div.territories,
+                    n_sales           = div.n_sales,
+                    work_days         = div.work_days,
+                    cycle             = div.cycle,
+                    philosophy        = div.philosophy,
+                    depo_lat          = req.depo_lat,
+                    depo_lon          = req.depo_lon,
+                    kd_dist           = req.kd_dist,
+                    div_sls           = div.div_sls,
+                    plan_id           = f"{plan_id}-{div.div_sls}",
+                    version_id        = vid,
+                    balance_tolerance = div.balance_tolerance,
+                )
             logger.info(
                 "Division %s (locked territories): %d stores → %d assignments",
                 div.div_sls, len(stores), len(a_dicts),
@@ -616,6 +649,98 @@ def _build_from_territories(
                 "qc_flag":           None,
                 "version_id":        version_id,
             })
+
+    return territories_out, _agg_to_schedule_out(agg), assignment_dicts
+
+
+# ── Helper: build assignments dari schedule_override (edit manual s2_preview) ──
+
+_DOW_TO_IDX0 = {
+    "Senin": 0, "Selasa": 1, "Rabu": 2, "Kamis": 3, "Jumat": 4, "Sabtu": 5, "Minggu": 6,
+}
+
+
+def _build_from_override(
+    store_map         : dict,
+    territories       : List[TerritoryIn],
+    schedule_override : List["SalesScheduleIn"],
+    philosophy        : str,
+    div_sls           : str,
+    version_id        : str,
+) -> "tuple[List[TerritoryOut], List[SalesScheduleOut], List[dict]]":
+    """
+    Bangun assignment LANGSUNG dari jadwal hasil edit manual user (s2_preview).
+    Hari & pekan diambil apa adanya dari override — TIDAK ada penjadwalan ulang.
+    `visit_order` = urutan sederhana (provisional; optimasi rute road-aware menyusul).
+
+    Keanggotaan pekan → pola kunjungan per toko:
+      - code di ganjil_codes saja    → M2C13 (ganjil)
+      - code di genap_codes saja     → M2C24 (genap)
+      - code hanya di customer_codes → M1 (tiap pekan: ganjil = genap = True)
+    """
+    # territories_out: kepemilikan sales tidak berubah di s2 — untuk konsistensi preview
+    territories_out: List[TerritoryOut] = []
+    for t in territories:
+        t_stores = [store_map[c] for c in t.customer_codes if c in store_map]
+        if not t_stores:
+            continue
+        ct_lat, ct_lon = centroid([s.coord for s in t_stores])
+        territories_out.append(TerritoryOut(
+            sales_index    = t.sales_index,
+            sales_name     = t.sales_name,
+            store_count    = len(t_stores),
+            centroid_lat   = ct_lat,
+            centroid_lon   = ct_lon,
+            customer_codes = [s.customer_code for s in t_stores],
+        ))
+
+    agg: Dict[str, Dict[int, dict]] = {}
+    assignment_dicts: List[dict] = []
+
+    for sales in schedule_override:
+        sn = sales.sales_name
+        agg.setdefault(sn, {})
+        for day in sales.days:
+            dow        = day.day_of_week
+            day_idx0   = _DOW_TO_IDX0.get(dow, 0)
+            day_index  = day_idx0 + 1
+            ganjil_set = set(day.ganjil_codes)
+            genap_set  = set(day.genap_codes)
+
+            if day_idx0 not in agg[sn]:
+                agg[sn][day_idx0] = {"dow": dow, "codes": [], "ganjil": [], "genap": []}
+            d = agg[sn][day_idx0]
+
+            for visit_order, code in enumerate(day.customer_codes, 1):
+                if code not in store_map:
+                    continue
+                in_g = code in ganjil_set
+                in_e = code in genap_set
+                if in_g and not in_e:
+                    ganjil, genap, vcycle = True, False, "M2"
+                elif in_e and not in_g:
+                    ganjil, genap, vcycle = False, True, "M2"
+                else:
+                    ganjil, genap, vcycle = True, True, "M1"
+
+                d["codes"].append(code)
+                if ganjil and not genap:   d["ganjil"].append(code)
+                elif genap and not ganjil: d["genap"].append(code)
+
+                assignment_dicts.append({
+                    "div_sls":           div_sls,
+                    "customer_code":     code,
+                    "sales_person_name": sn,
+                    "philosophy":        philosophy,
+                    "day_index":         day_index,
+                    "day_of_week":       dow,
+                    "visit_cycle":       vcycle,
+                    "visit_ganjil":      ganjil,
+                    "visit_genap":       genap,
+                    "visit_order":       visit_order,
+                    "qc_flag":           None,
+                    "version_id":        version_id,
+                })
 
     return territories_out, _agg_to_schedule_out(agg), assignment_dicts
 
