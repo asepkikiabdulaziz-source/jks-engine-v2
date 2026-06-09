@@ -1,6 +1,6 @@
 # JKS Route Engine v2 — Roadmap
 
-> Dibuat: 2026-06-09 · Baseline: `master @ 7f24516`
+> Dibuat: 2026-06-09 · Baseline: `master @ 475cda4` · Diperbarui: sesi 11 (A ✅ selesai, §F ditambah)
 > Dokumen perencanaan untuk pekerjaan berikutnya. Setiap item: tujuan, kondisi
 > sekarang (berdasarkan kode/DB nyata), pendekatan, effort, ketergantungan, dan
 > **keputusan terbuka** yang perlu diputuskan user.
@@ -11,7 +11,10 @@
 
 - ✅ **Editor jadwal hari/pekan** di `s2_preview` (pindah toko antar hari & antar
   pola M1/M2C13/M2C24 dalam satu sales) + **undo/redo terpadu** untuk semua modul
-  adjustment manual + **UI dropdown**. Terdeploy ke `master` (`7f24516`).
+  adjustment manual + **UI dropdown**. Terdeploy ke `master`.
+- ✅ **Adjustment sadar-filosofi** (item A, Opsi 2): TRAFFIC s1=pindah zona-hari,
+  s2=pindah sales+pekan; BLOCKING s1=pindah sales, s2=pindah hari+pekan. Popup toko
+  tampil **sales aktual + pola**. **Terbukti persist via DB plan V6.**
 - ✅ Persistence via `schedule_override` di `/generate-plan` → `_build_from_override`.
 - ✅ Engine: BLOCKING + TRAFFIC, penjadwalan hari **murni K-Means**, deterministik,
   **no-network**, fail-loud.
@@ -24,6 +27,11 @@
   jaringan (OSM/Google) = **layer enrichment terpisah**, bukan di dalam engine.
 - **Engine merekomendasi, manusia memutuskan** — semua adjustment manual.
 - **Verifikasi dulu, anti-kosmetik, root-cause sebelum solusi.**
+- **Engine = perencana dari-0, bukan optimizer operasi berjalan.** v1 mengoptimasi
+  *keterbacaan + balance wajar + compactness* dari data minimal. Penyempurnaan objektif
+  (beban berbobot, kapasitas waktu, rute jalan) **ditunda sadar** ke fase berdata:
+  menambahkannya tanpa durasi-kunjungan/travel nyata = presisi semu (kosmetik).
+  Detail & rasional: **§F**.
 
 ---
 
@@ -31,40 +39,34 @@
 
 | # | Item | Nilai | Effort | Tergantung |
 |---|------|-------|--------|-----------|
-| A | Hardening editor di mode **TRAFFIC** | Cegah bug senyap | S–M | — |
+| A | ✅ **SELESAI** — adjustment TRAFFIC sadar-filosofi (Opsi 2), terbukti V6 | Cegah bug senyap | ✅ | — |
 | B | **Edit plan dari draft** (iterasi plan tersimpan) | Tinggi | M | — |
 | C | **Edit plan dari upload** (import plan jadi) | Sedang | L | B |
 | D | **Mapping ke kode sales real** (SLS-02 → kode nyata) | Tinggi (rollout) | M | — |
 | E | **Optimasi rute road-aware** (OSM/Google) | Realism tertinggi | L | — |
+| F | **Filosofi objektif engine** (balance/pekan/kapasitas) — keputusan & penundaan | Dokumentasi | — | E + data |
 | — | AUDIT C1/H1 (keamanan) | **WAJIB pra-trial** | S–M | — |
 
 Effort: **S** ≈ <1 sesi, **M** ≈ 1–2 sesi, **L** ≈ 3+ sesi.
 
 ---
 
-## A. Hardening editor di mode TRAFFIC
+## A. Hardening editor di mode TRAFFIC — ✅ SELESAI (Opsi 2)
 
-**Masalah (temuan analisis kode):** editor `s2_preview` (`applyMove`) dibangun dengan
-asumsi **BLOCKING** — saat toko dipindah antar hari, ia **tetap di sales yang sama**
-(`salesOfCode`). Tapi di **TRAFFIC**, sales = **zona hari** (day-first): "hari" itulah
-yang menentukan salesman. Jadi "pindah hari" di TRAFFIC seharusnya memindahkan toko ke
-**salesman pemilik hari tujuan**, bukan mempertahankan sales lama. Editor sekarang akan
-menghasilkan jadwal yang **tak konsisten** dengan logika TRAFFIC.
+**Status (sesi 11):** selesai via **Opsi 2 (semantik penuh)**, bukan gate. `applyMove` +
+`S2MovePicker` kini **sadar-filosofi**:
+- **TRAFFIC:** s1 = pindah **zona-hari**; s2 = pindah **sales** (hari sama) + pekan.
+- **BLOCKING:** s1 = pindah **sales**; s2 = pindah **hari** + pekan.
+- Popup toko menampilkan **sales aktual + pola** (M1/M2C13/M2C24) → user tahu tujuan pindah.
 
-**Risiko:** silent — editor "jalan" tapi hasil di TRAFFIC ngawur. Reassign-sales (s1)
-juga sudah di-gate berbeda (di TRAFFIC, s1_done = zona hari, bukan sales).
+**Terbukti persist (DB plan V6, TRAFFIC):** `C2257748` s1 zona→Selasa; `C2259594` s2 →
+sales `…-02`, Senin, ganjil. Override (`schedule_override` → `_build_from_override`) jalan
+untuk **kedua** filosofi.
 
-**Pendekatan:**
-- **Opsi 1 (cepat, aman):** gate editor hari/pekan **hanya BLOCKING**. Di TRAFFIC,
-  sembunyikan picker + tampilkan info ("adjustment per-sales hanya untuk BLOCKING").
-- **Opsi 2 (benar penuh):** definisikan semantik TRAFFIC — `applyMove` sadar-filosofi:
-  pindah-hari = pindahkan ke sales/zona hari tujuan; pindah-pekan tetap dalam blok.
-
-**Rekomendasi:** Opsi 1 lebih dulu (cegah bug). Opsi 2 hanya bila TRAFFIC dipakai serius.
-**Langkah pertama:** verifikasi live perilaku editor di TRAFFIC (jalankan TRAFFIC →
-s2_preview → coba pindah) untuk konfirmasi temuan ini.
-
-**Effort:** S (Opsi 1) / M (Opsi 2).
+**Masalah asal (arsip):** `applyMove` semula berasumsi BLOCKING — "pindah hari"
+mempertahankan sales lama; di TRAFFIC (day-first) itu tak konsisten karena *hari* yang
+menentukan salesman. Diperbaiki dengan `applyMove` sadar-filosofi (Opsi 1 gate-saja
+**tidak** diambil).
 
 ---
 
@@ -184,6 +186,40 @@ saja tanpa blokir item lain.
 
 ---
 
+## F. Filosofi objektif engine — keputusan & penundaan sadar (sesi 11)
+
+Kritik "vs standar industri" (balance beban/potensi, rute road-aware, kapasitas waktu,
+frekuensi-diturunkan) sebagian besar berasal dari literatur **optimasi salesforce matang**.
+Engine ini **perencana dari-0**, bukan optimizer operasi berjalan — penyempurnaan itu
+**ditunda sadar**, bukan luput. Menambahkannya tanpa data operasional nyata = presisi semu.
+
+| Aspek | Standar (optimasi matang) | Keputusan kita | Rasional |
+|------|---------------------------|----------------|----------|
+| **Balance** | beban (frekuensi×waktu) / potensi (omset) | **COUNT** | "adil kasat mata = sama jumlah". Balance omset **vs** compactness = trade-off → **pilih compactness**. |
+| **Balance jarak/waktu** | drive-time matrix | **ditunda → pasca-OSM** | garis-lurus menipu (membelah gunung/sungai). **Pertimbangkan ulang saat OSM live** (item E) — *permintaan eksplisit user*. |
+| **Split pekan (ganjil/genap)** | ratakan beban antar-pekan (PVRP) | **K-Means geografis, tak diratakan** | geo-split beli (a) verifiable-di-peta + (b) rute per-pekan rapat. Meratakan → rute menyebar → **biaya compactness**. Kandidat peningkatan: terapkan toleransi ±X ke layer ini — hati-hati distorsi compactness + coverage. |
+| **Contiguity** | dijamin (SKATER/districting) | **muncul sendiri (tak dijamin)** | level berikutnya; sering ko-resolve dgn clustering road-aware (E). |
+| **Kapasitas jam-kerja/hari** | Σ waktu-layan+travel ≤ jam kerja | **tak dimodelkan** | tanpa OSM, estimasi waktu = kosmetik. Fase berdata. |
+| **Frekuensi kunjungan** | diturunkan dari nilai akun (ABC) | **INPUT apa adanya** | data terbatas; observasi lapangan dulu. |
+
+**Linchpin = item E (OSM).** Ia membuka kembali baris *balance-jarak*, *kapasitas-waktu*,
+dan *contiguity road-aware* sekaligus — sebagian besar §F **menunggu E**.
+
+**Pemisahan untuk diobservasi (bukan aksi sekarang):** *bobot frekuensi* ≠ *omset*. Toko
+BIWEEKLY = ½ beban-kunjungan WEEKLY per pekan → koreksi **count**, bukan **nilai**: tak
+menyeret toko jauh seperti omset (murah secara compactness), tapi butuh formulasi
+*capacitated-clustering* (bukan flag) & tetap pakai sebagian budget compactness. **Ukur
+dulu:** seberapa timpang campuran WEEKLY/BIWEEKLY antar-sales? Seragam → COUNT ≈ beban-per-pekan
+(tak masalah); timpang → kandidat penyempurnaan **paling murah** di tabel ini.
+
+**Pemisahan untuk split pekan:** imbalance di **partisi sales** = sinyal white-space (zona
+kurang coverage → sales akuisisi baru; **jangan** diratakan paksa). Tapi imbalance
+**ganjil/genap dalam satu sales** = toko **sama** dibelah ke dua pekan = *ayunan beban
+antar-pekan*, bukan sinyal pasar. Pertanyaan satu-satunya: **sanggupkah sales menyerap
+pekan-berat/pekan-ringan?** → operasional, bukan algoritmik.
+
+---
+
 ## Lintas-isu — WAJIB sebelum trial luas
 
 - **C1 — Otorisasi per-area di API.** Saat ini siapa pun dengan JWT valid bisa akses
@@ -199,8 +235,8 @@ saja tanpa blokir item lain.
 > Catatan: urutan ini **beda** dari urutan kamu menyebut item — silakan timpa sesuai
 > prioritas bisnis. Rasional di bawah.
 
-- **Fase 0 — Hardening (sekarang):** **A (gate TRAFFIC)** + **C1/H1**. Kecil tapi
-  mencegah bug senyap + mengamankan pra-trial. Tak menunda apa pun.
+- **Fase 0 — Hardening (sekarang):** **C1/H1** (A ✅ selesai). Mengamankan pra-trial.
+  Tak menunda apa pun.
 - **Fase 1 — Iterasi plan:** **B (edit draft)**. Reuse editor yang baru jadi, nilai
   tinggi (plan jadi benar-benar bisa diolah ulang).
 - **Fase 2 — Siap lapangan:** **D (kode sales real)**. Infra DB sudah ada; wajib agar
@@ -213,7 +249,7 @@ saja tanpa blokir item lain.
 
 ## Keputusan terbuka (ringkasan — butuh user)
 
-1. **TRAFFIC:** gate-saja (Opsi 1) atau definisikan semantik penuh (Opsi 2)?
+1. ~~**TRAFFIC:** gate vs semantik penuh~~ → **RESOLVED**: Opsi 2 (semantik penuh) dibangun + terbukti V6.
 2. **Edit draft:** plan approved read-only? Tiap edit jadi versi baru?
 3. **Mapping sales:** resolve-saat-baca vs simpan-kode-real? (audit `get_salesman_slots` dulu)
 4. **OSM:** OSRM self-host (rekomendasi) vs Google? Saat-save vs on-demand? Hosting di mana?
