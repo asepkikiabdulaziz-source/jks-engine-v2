@@ -276,16 +276,18 @@ function StoreInfoCard({ sel, territories, schedule, philosophy, onReassign, onC
   const canReassign      = stage === 's1_done' && territories.length > 1
 
   // Cari hari + pekan dari schedule (tersedia saat s2_preview / s2_done)
-  const scheduleInfo: { day_of_week: string; pekan: 'ganjil' | 'genap' | null } | null = (() => {
+  const scheduleInfo: { sales_name: string; day_of_week: string; pattern: 'M1'|'M2C13'|'M2C24' } | null = (() => {
     if (!schedule) return null
     for (const ss of schedule) {
       for (const d of ss.days) {
         if (d.customer_codes.includes(store.customer_code)) {
+          const isG = d.ganjil_codes.includes(store.customer_code)
+          const isE = d.genap_codes.includes(store.customer_code)
           return {
+            sales_name  : ss.sales_name,
             day_of_week : d.day_of_week,
-            pekan       : d.ganjil_codes.includes(store.customer_code) ? 'ganjil'
-                        : d.genap_codes.includes(store.customer_code)  ? 'genap'
-                        : null,
+            // Pola kunjungan: ganjil→M2C13, genap→M2C24, selain itu (tiap pekan)→M1
+            pattern     : isG && !isE ? 'M2C13' : isE && !isG ? 'M2C24' : 'M1',
           }
         }
       }
@@ -346,8 +348,8 @@ function StoreInfoCard({ sel, territories, schedule, philosophy, onReassign, onC
           <div className="flex items-center gap-xs">
             <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: 14 }}>person</span>
             <div className="flex-1 min-w-0">
-              <p className="text-[10px] text-on-surface-variant">{isTraffic ? 'Zone Hari' : 'Salesperson'}</p>
-              <p className="text-xs font-semibold text-on-surface font-data-mono truncate">{isTraffic ? currentSales : salesLabel(currentSales)}</p>
+              <p className="text-[10px] text-on-surface-variant">{(isTraffic && !scheduleInfo) ? 'Zone Hari' : 'Salesperson'}</p>
+              <p className="text-xs font-semibold text-on-surface font-data-mono truncate">{scheduleInfo ? salesLabel(scheduleInfo.sales_name) : (isTraffic ? currentSales : salesLabel(currentSales))}</p>
             </div>
             {store.omset != null && store.omset > 0 && (
               <div className="text-right shrink-0">
@@ -369,15 +371,15 @@ function StoreInfoCard({ sel, territories, schedule, philosophy, onReassign, onC
                          style={{ background: DAY_COLORS[scheduleInfo.day_of_week] ?? '#9099a8' }} />
                     <span className="text-xs font-semibold text-on-surface">{scheduleInfo.day_of_week}</span>
                   </div>
-                  {scheduleInfo.pekan && (
-                    <span className="text-[10px] font-bold px-[5px] py-[1px] rounded-full"
-                          style={{
-                            color      : scheduleInfo.pekan === 'ganjil' ? WEEK_GANJIL_COLOR : WEEK_GENAP_COLOR,
-                            background : scheduleInfo.pekan === 'ganjil' ? 'rgba(99,102,241,0.10)' : 'rgba(249,115,22,0.10)',
-                          }}>
-                      {scheduleInfo.pekan === 'ganjil' ? WEEK_LABEL_GANJIL : WEEK_LABEL_GENAP}
-                    </span>
-                  )}
+                  <span className="text-[10px] font-bold px-[5px] py-[1px] rounded-full"
+                        style={{
+                          color      : scheduleInfo.pattern === 'M2C13' ? WEEK_GANJIL_COLOR
+                                     : scheduleInfo.pattern === 'M2C24' ? WEEK_GENAP_COLOR : '#0c9488',
+                          background  : scheduleInfo.pattern === 'M2C13' ? 'rgba(99,102,241,0.10)'
+                                     : scheduleInfo.pattern === 'M2C24' ? 'rgba(249,115,22,0.10)' : 'rgba(12,148,136,0.10)',
+                        }}>
+                    {scheduleInfo.pattern}
+                  </span>
                 </div>
               </div>
             </div>
@@ -394,11 +396,11 @@ function StoreInfoCard({ sel, territories, schedule, philosophy, onReassign, onC
           {/* Reassign — s1_done */}
           {canReassign && (
             <div style={{ borderTop: '1px solid rgba(80,95,118,0.08)', paddingTop: 8 }}>
-              <p className="text-[10px] font-semibold text-on-surface-variant mb-xs">Pindahkan ke:</p>
+              <p className="text-[10px] font-semibold text-on-surface-variant mb-xs">Pindahkan ke {isTraffic ? 'Zone Hari' : 'salesperson'}:</p>
               <select value="" onChange={e => { if (e.target.value) onReassign(e.target.value) }}
                       className="w-full text-xs font-semibold rounded-lg px-sm py-[6px] outline-none cursor-pointer"
                       style={{ border: '1px solid rgba(80,95,118,0.25)', color: '#1f2937', background: '#fff' }}>
-                <option value="">pilih salesperson…</option>
+                <option value="">{isTraffic ? 'pilih Zone Hari…' : 'pilih salesperson…'}</option>
                 {territories
                   .filter(t => t.sales_name !== currentSales)
                   .map(t => {
@@ -453,32 +455,39 @@ const S2_PATTERNS: Array<{key:'M1'|'M2C13'|'M2C24'; label:string; color:string}>
   { key:'M2C24', label:'M2C24 · genap',   color:WEEK_GENAP_COLOR },
 ]
 
-function S2MovePicker({ divId, selList, schedule, onApply }: {
+function S2MovePicker({ divId, selList, schedule, isTraffic, onApply }: {
   divId    : string
   selList  : StorePoint[]
   schedule : SalesSchedule[]
-  onApply  : (divId:string, codes:string[], day:string, pattern:'M1'|'M2C13'|'M2C24') => void
+  isTraffic: boolean
+  onApply  : (divId:string, codes:string[], target:{day?:string; sales?:string; pattern:'M1'|'M2C13'|'M2C24'}) => void
 }) {
   const codes  = useMemo(()=>selList.map(s=>s.customer_code), [selList])
   const selSet = useMemo(()=>new Set(codes), [codes])
-  // Hari & pola toko terpilih SAAT INI → default picker (kalau seragam)
+  // Daftar sales (sumbu utama TRAFFIC) dari schedule
+  const salesList = useMemo(()=>schedule.map(ss=>ss.sales_name), [schedule])
+
+  // Posisi (sales, hari, pola) toko terpilih SAAT INI → default picker (kalau seragam)
   const cur = useMemo(()=>{
-    const days=new Set<string>(), pats=new Set<string>()
+    const days=new Set<string>(), sales=new Set<string>(), pats=new Set<string>()
     for (const ss of schedule) for (const d of ss.days) for (const c of d.customer_codes) {
       if (!selSet.has(c)) continue
-      days.add(d.day_of_week)
+      days.add(d.day_of_week); sales.add(ss.sales_name)
       pats.add(d.ganjil_codes.includes(c) ? 'M2C13' : d.genap_codes.includes(c) ? 'M2C24' : 'M1')
     }
     return {
-      day: days.size===1 ? [...days][0] : null,
-      pat: pats.size===1 ? ([...pats][0] as 'M1'|'M2C13'|'M2C24') : null,
+      day:   days.size===1  ? [...days][0]  : null,
+      sales: sales.size===1 ? [...sales][0] : null,
+      pat:   pats.size===1  ? ([...pats][0] as 'M1'|'M2C13'|'M2C24') : null,
     }
   }, [schedule, selSet])
 
-  const [pickDay,setPickDay] = useState<string|null>(null)
-  const [pickPat,setPickPat] = useState<'M1'|'M2C13'|'M2C24'|null>(null)
-  const effDay = pickDay ?? cur.day
-  const effPat = pickPat ?? cur.pat
+  // Sumbu utama: BLOCKING = Hari (sales tetap) · TRAFFIC = Sales (hari/zona tetap)
+  const curPrimary = isTraffic ? cur.sales : cur.day
+  const [pickPrimary,setPickPrimary] = useState<string|null>(null)
+  const [pickPat,setPickPat]         = useState<'M1'|'M2C13'|'M2C24'|null>(null)
+  const effPrimary = pickPrimary ?? curPrimary
+  const effPat     = pickPat ?? cur.pat
 
   // Berapa toko yang frekuensinya jadi beda dari visit_frequency-nya
   const freqWarn = useMemo(()=>{
@@ -491,20 +500,25 @@ function S2MovePicker({ divId, selList, schedule, onApply }: {
     return n
   }, [selList, effPat])
 
-  const changed = !!effDay && !!effPat && (effDay!==cur.day || effPat!==cur.pat)
+  const changed = !!effPrimary && !!effPat && (effPrimary!==curPrimary || effPat!==cur.pat)
+
+  function submit() {
+    if (!effPrimary || !effPat) return
+    onApply(divId, codes, isTraffic ? { sales: effPrimary, pattern: effPat } : { day: effPrimary, pattern: effPat })
+  }
 
   return (
     <>
       <div className="w-px h-5 shrink-0" style={{ background:'rgba(255,255,255,0.15)' }}/>
       <label className="flex items-center gap-[4px] shrink-0">
-        <span className="text-[10px]" style={{ color:'rgba(255,255,255,0.45)' }}>Hari</span>
-        <select value={effDay ?? ''} onChange={e=>setPickDay(e.target.value)}
-                className="text-[11px] font-semibold rounded-md px-[6px] py-[4px] outline-none cursor-pointer"
+        <span className="text-[10px]" style={{ color:'rgba(255,255,255,0.45)' }}>{isTraffic ? 'Sales' : 'Hari'}</span>
+        <select value={effPrimary ?? ''} onChange={e=>setPickPrimary(e.target.value)}
+                className="text-[11px] font-semibold rounded-md px-[6px] py-[4px] outline-none cursor-pointer max-w-[160px]"
                 style={{ background:'rgba(255,255,255,0.14)', color:'#fff', border:'1px solid rgba(255,255,255,0.22)' }}>
-          {!effDay && <option value="" disabled style={{ color:'#111' }}>pilih…</option>}
-          {S2_MOVE_DAYS.map(d=>(
-            <option key={d} value={d} style={{ color:'#111' }}>{d}</option>
-          ))}
+          {!effPrimary && <option value="" disabled style={{ color:'#111' }}>pilih…</option>}
+          {isTraffic
+            ? salesList.map(sn=>(<option key={sn} value={sn} style={{ color:'#111' }}>{salesLabel(sn)}</option>))
+            : S2_MOVE_DAYS.map(d=>(<option key={d} value={d} style={{ color:'#111' }}>{d}</option>))}
         </select>
       </label>
       <label className="flex items-center gap-[4px] shrink-0">
@@ -525,7 +539,7 @@ function S2MovePicker({ divId, selList, schedule, onApply }: {
           {freqWarn}
         </span>
       )}
-      <button onClick={()=>{ if(effDay&&effPat) onApply(divId,codes,effDay,effPat) }}
+      <button onClick={submit}
               disabled={!changed}
               className="flex items-center gap-[4px] px-sm py-[4px] rounded-lg text-[11px] font-bold transition-all disabled:opacity-30 shrink-0"
               style={{ background:'#7c3aed', color:'#fff' }}>
@@ -547,7 +561,7 @@ function MultiSelectBar({ selectedCodes, stores, omsetByCode, divisionStates, di
   divisionStates : Map<string,DivisionState>
   divisions      : DivisionConfig[]
   onReassignAll  : (divId:string, newSalesName:string) => void
-  onApplyMove    : (divId:string, codes:string[], day:string, pattern:'M1'|'M2C13'|'M2C24') => void
+  onApplyMove    : (divId:string, codes:string[], target:{day?:string; sales?:string; pattern:'M1'|'M2C13'|'M2C24'}) => void
   onClear        : () => void
 }) {
   const selList    = stores.filter(s => selectedCodes.has(s.customer_code))
@@ -587,7 +601,7 @@ function MultiSelectBar({ selectedCodes, stores, omsetByCode, divisionStates, di
 
       {/* Pindah hari/pekan (s2_preview, Tahap 3) */}
       {isS2 && divState && divState.schedule && (
-        <S2MovePicker divId={singleDiv!} selList={selList} schedule={divState.schedule} onApply={onApplyMove} />
+        <S2MovePicker divId={singleDiv!} selList={selList} schedule={divState.schedule} isTraffic={isTraffic} onApply={onApplyMove} />
       )}
 
       {/* Reassign targets → dropdown */}
@@ -599,7 +613,7 @@ function MultiSelectBar({ selectedCodes, stores, omsetByCode, divisionStates, di
             <select value="" onChange={e=>{ if(e.target.value) onReassignAll(singleDiv!, e.target.value) }}
                     className="text-[11px] font-semibold rounded-md px-[6px] py-[4px] outline-none cursor-pointer"
                     style={{ background:'rgba(255,255,255,0.14)', color:'#fff', border:'1px solid rgba(255,255,255,0.22)' }}>
-              <option value="" style={{ color:'#111' }}>pilih sales…</option>
+              <option value="" style={{ color:'#111' }}>{isTraffic ? 'pilih Zone Hari…' : 'pilih sales…'}</option>
               {territories.map(t => {
                 // Sembunyikan jika semua toko yg dipilih sudah ada di territory ini
                 const allHere = selList.every(s => t.customer_codes.includes(s.customer_code))
@@ -1756,7 +1770,15 @@ export default function RoutingEnginePage() {
   // ── Pindah hari/pekan toko dalam satu sales (Tahap 3, s2_preview) ──────
   // targetPattern: 'M1' (tiap pekan) | 'M2C13' (ganjil) | 'M2C24' (genap).
   // Toko TETAP di sales asalnya — hanya hari & pola pekan yang berubah.
-  function applyMove(divId: string, codes: string[], targetDay: string, targetPattern: 'M1'|'M2C13'|'M2C24') {
+  // Pindah toko di s2_preview, SADAR-FILOSOFI:
+  //  - BLOCKING: target = {day, pattern} → ganti HARI (sales tetap)
+  //  - TRAFFIC : target = {sales, pattern} → ganti SALES (hari/zona tetap)
+  // Sumbu yang tidak diisi di target = dipertahankan dari posisi asal.
+  function applyMove(
+    divId: string,
+    codes: string[],
+    target: { day?: string; sales?: string; pattern: 'M1'|'M2C13'|'M2C24' },
+  ) {
     const cur = divisionStates.get(divId)
     if (!cur?.schedule || cur.stage !== 's2_preview') return
     const moveSet = new Set(codes)
@@ -1774,9 +1796,11 @@ export default function RoutingEnginePage() {
       })),
     }))
 
-    // Sales asal tiap kode (pindah tetap dalam sales yang sama)
-    const salesOfCode = new Map<string,string>()
-    sched.forEach(ss => ss.days.forEach(d => d.customer_codes.forEach(c => { if (moveSet.has(c)) salesOfCode.set(c, ss.sales_name) })))
+    // Posisi (sales, hari) asal tiap kode
+    const fromOf = new Map<string, { sales: string; day: string }>()
+    sched.forEach(ss => ss.days.forEach(d => d.customer_codes.forEach(c => {
+      if (moveSet.has(c)) fromOf.set(c, { sales: ss.sales_name, day: d.day_of_week })
+    })))
 
     // 1. Cabut kode dari posisi lama
     sched.forEach(ss => ss.days.forEach(d => {
@@ -1785,28 +1809,34 @@ export default function RoutingEnginePage() {
       d.genap_codes    = d.genap_codes.filter(c => !moveSet.has(c))
     }))
 
-    // 2. Taruh di hari tujuan dengan pola tujuan (dalam sales asal)
+    // 2. Taruh di (sales, hari) tujuan; sumbu kosong = pertahankan asal
     moveSet.forEach(code => {
-      const sn = salesOfCode.get(code); if (!sn) return
-      const ss = sched.find(s => s.sales_name === sn); if (!ss) return
-      let day = ss.days.find(d => d.day_of_week === targetDay)
-      if (!day) { day = { day_of_week: targetDay, store_count: 0, customer_codes: [], ganjil_codes: [], genap_codes: [] }; ss.days.push(day) }
+      const from = fromOf.get(code); if (!from) return
+      const tSales = target.sales ?? from.sales
+      const tDay   = target.day   ?? from.day
+      let ss = sched.find(s => s.sales_name === tSales)
+      if (!ss) { ss = { sales_name: tSales, days: [] }; sched.push(ss) }
+      let day = ss.days.find(d => d.day_of_week === tDay)
+      if (!day) { day = { day_of_week: tDay, store_count: 0, customer_codes: [], ganjil_codes: [], genap_codes: [] }; ss.days.push(day) }
       if (!day.customer_codes.includes(code)) day.customer_codes.push(code)
-      if (targetPattern === 'M2C13') day.ganjil_codes.push(code)
-      else if (targetPattern === 'M2C24') day.genap_codes.push(code)
+      if (target.pattern === 'M2C13') day.ganjil_codes.push(code)
+      else if (target.pattern === 'M2C24') day.genap_codes.push(code)
       // M1 → tidak masuk ganjil/genap (ganjil = genap = true di engine)
     })
 
-    // 3. Rapikan: store_count, urut hari, buang hari kosong
-    sched.forEach(ss => {
-      ss.days.forEach(d => { d.store_count = d.customer_codes.length })
-      ss.days = ss.days
-        .filter(d => d.customer_codes.length > 0)
-        .sort((a,b) => DAY_ORDER.indexOf(a.day_of_week) - DAY_ORDER.indexOf(b.day_of_week))
-    })
+    // 3. Rapikan: store_count, urut hari, buang hari & sales kosong
+    const schedClean = sched
+      .map(ss => ({
+        sales_name: ss.sales_name,
+        days: ss.days
+          .map(d => ({ ...d, store_count: d.customer_codes.length }))
+          .filter(d => d.customer_codes.length > 0)
+          .sort((a, b) => DAY_ORDER.indexOf(a.day_of_week) - DAY_ORDER.indexOf(b.day_of_week)),
+      }))
+      .filter(ss => ss.days.length > 0)
 
-    commitDivEdit(divId, cur, { ...cur, schedule: sched })
-    setSelectedSales(prev => prev?.divId===divId ? refreshSelectedSales(prev, sched) : prev)
+    commitDivEdit(divId, cur, { ...cur, schedule: schedClean })
+    setSelectedSales(prev => prev?.divId===divId ? refreshSelectedSales(prev, schedClean) : prev)
     setMultiSelected(new Set())
     setSelectedStore(null)
   }
