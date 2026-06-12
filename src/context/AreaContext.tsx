@@ -9,6 +9,7 @@ export interface ActiveArea {
   nama_area: string
   lat: number
   lon: number
+  status_code?: string
   cabang: Cabang
   region: Region
 }
@@ -19,7 +20,7 @@ interface AreaState {
   // data untuk picker
   regions: Region[]
   cabangs: Cabang[]
-  areas: { id: string; kd_dist: string; nama_area: string; lat: number; lon: number }[]
+  areas: { id: string; kd_dist: string; nama_area: string; lat: number; lon: number; status_code?: string }[]
   selectedRegion: Region | null
   selectedCabang: Cabang | null
   setSelectedRegion: (r: Region | null) => void
@@ -69,8 +70,9 @@ export function AreaProvider({ children }: { children: React.ReactNode }) {
     setAreas([])
     if (!selectedCabang) return
     setLoadingAreas(true)
-    supabase.rpc('get_routing_areas', { p_cabang_id: selectedCabang.id }).then(({ data }) => {
-      if (data) setAreas(data)
+    supabase.rpc('get_routing_areas', { p_cabang_id: selectedCabang.id }).then(({ data, error }) => {
+      if (error) console.error('get_routing_areas error:', error)
+      setAreas(data ?? [])
       setLoadingAreas(false)
     })
   }, [selectedCabang])

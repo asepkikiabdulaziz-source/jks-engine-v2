@@ -72,7 +72,10 @@ function AreaSelects({
             className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-md py-sm font-body-sm text-body-sm text-on-surface outline-none focus:border-on-tertiary-container appearance-none pr-8 disabled:opacity-40"
           >
             <option value="">— Pilih Area —</option>
-            {areas.map(a => <option key={a.id} value={a.id}>{a.nama_area} ({a.kd_dist})</option>)}
+            {selectedCabang && !loadingAreas && areas.length === 0 && (
+              <option disabled>Tidak ada area untuk cabang ini</option>
+            )}
+            {areas.map(a => <option key={a.id} value={a.id}>{a.nama_area} ({a.kd_dist}){a.status_code ? ` · ${a.status_code}` : ''}</option>)}
           </select>
           <span className={`material-symbols-outlined absolute right-sm top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none text-[14px] ${loadingAreas ? 'animate-spin' : ''}`}>
             {loadingAreas ? 'autorenew' : 'expand_more'}
