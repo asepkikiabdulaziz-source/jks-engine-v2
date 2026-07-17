@@ -5,9 +5,9 @@ dist/
 *.tsbuildinfo
 
 # ── Environment files ────────────────────────────────────────────────────────
-.env
-.env.local
-.env.*.local
+# Pola luas: tangkap SEMUA varian (.env, .env.local, ".env - heroes", .env.prod, dst)
+.env*
+!.env.example
 
 # ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
