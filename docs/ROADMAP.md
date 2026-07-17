@@ -222,11 +222,30 @@ pekan-berat/pekan-ringan?** → operasional, bukan algoritmik.
 
 ## Lintas-isu — WAJIB sebelum trial luas
 
-- **C1 — Otorisasi per-area di API.** Saat ini siapa pun dengan JWT valid bisa akses
-  area **mana pun**. Tambah cek: user hanya boleh area yang jadi haknya (`access_roles`).
-- **H1 — Validasi engine secret.** `X-Engine-Secret`/`ROUTE_ENGINE_SECRET` belum
-  divalidasi.
+- **C1 — Otorisasi di API.** ⚠️ **Status 2026-07-17 (sesi 12, malam): jalur TULIS ditutup, jalur BACA
+  MASIH BOCOR.** DB Supabase ini **dipakai bersama** project nabati-heroes (~82 user aktif, login harian).
+  `_verify_jwt` (`api.py:111`) hanya `db.auth.get_user(token)` → memvalidasi token ke GoTrue project
+  **yang sama** → **JWT user aplikasi LAIN lolos**.
+  **Sudah ditutup (level DB):** guard `auth.uid()`/`COALESCE(auth.uid(),p_created_by)` LIVE di
+  `get_my_profile` + 5 RPC mutasi (`approve_plan`/`discard_plan`/`save_plan`/`stage_stores`/
+  `upsert_stores`) — `supabase/migrations/0003_guard_authz_rpc.sql` + `0004_fix_save_plan_service_role_guard.sql`
+  (regresi `save_plan` via service_role ditemukan & diperbaiki hari yang sama). Terverifikasi HTTP
+  sungguhan: user nabati-heroes (Putri) ditolak `42501`, ADMIN JKS lolos. `/generate-plan` (dry_run=false,
+  **MENULIS** plan) kini aman.
+  **MASIH TERBUKA:** `get_stores_by_area` (dipanggil service_role di `api.py:327,765,829` untuk
+  `/generate-plan`,`/stage1`,`/stage2`) **tak ter-guard** — nol cek membership. Beda dari `save_plan`,
+  fungsi ini hanya terima `p_area_id`, tak ada parameter identitas pemanggil utk fallback pola
+  `COALESCE`. User nabati-heroes mana pun masih bisa baca seluruh toko area mana pun (`customer_code`
+  + lat/lon) via ketiga endpoint itu. **Perbaikan kemungkinan di level `api.py`** (cek membership
+  setelah `_verify_jwt`, sebelum panggil `get_stores_by_area`) — bukan migrasi SQL, perlu redeploy.
+  BELUM dikerjakan.
+- **H1 — Validasi engine secret.** `X-Engine-Secret`/`ROUTE_ENGINE_SECRET` belum divalidasi.
+  ⚠️ Catatan sesi 12: **pengirimnya (Edge Function) = jalur MATI** — `RoutingEnginePage` `fetch()`
+  langsung browser→FastAPI, tak pernah `functions.invoke`. Shared-secret tak cocok untuk jalur nyata
+  (rahasianya harus dikirim ke browser). Pertimbangkan ulang bentuknya, jangan salin resep lama.
 - → **Perbaiki sebelum membuka trial ke banyak user.** Sampai itu, trial wajib tertutup.
+- **Ketergantungan DB bersama** — lihat `docs/incident-2026-07-17/README.md`: login JKS pernah mati
+  total gara-gara bug di hook milik project lain. Risiko ini permanen selama DB dipakai bersama.
 
 ---
 
