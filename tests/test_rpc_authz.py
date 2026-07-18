@@ -201,3 +201,59 @@ def test_save_plan_service_role_context_non_member_rejected(db_cursor):
     with pytest.raises(psycopg2.Error) as exc_info:
         _call_save_plan(db_cursor, _random_uuid())
     assert _denied(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# get_stores_by_area -- C1 jalur BACA. Pemanggil CAMPURAN: 4 tempat di src/
+# (browser, auth.uid() terisi) + 3 tempat di api.py (service_role, auth.uid()
+# NULL, param baru p_caller_id sbg fallback). Signature: (p_area_id uuid,
+# p_caller_id uuid DEFAULT NULL) -- default NULL supaya 4 pemanggil browser
+# TAK PERLU diubah sama sekali (PostgREST kirim named-param, yang tak dikirim
+# otomatis pakai default).
+#
+# TANGERANG_KOTA dipakai (bukan UUID acak) supaya test "member lolos" juga
+# membuktikan data tetap mengalir benar, bukan cuma "tidak error".
+# ---------------------------------------------------------------------------
+
+TANGERANG_KOTA_ID = "57b8e747-91d2-4b0a-89c1-35141d09d72a"
+
+
+def test_get_stores_by_area_browser_context_member_passes(db_cursor):
+    _as_member(db_cursor, JKS_ADMIN_ID)
+    db_cursor.execute("select * from get_stores_by_area(%s::uuid)", (TANGERANG_KOTA_ID,))
+    rows = db_cursor.fetchall()
+    assert len(rows) > 0, "member harus tetap dapat data toko (regresi: guard terlalu ketat)"
+
+
+def test_get_stores_by_area_browser_context_non_member_rejected(db_cursor):
+    """CELAH C1 (sebelum fix): non-member (JWT valid dari GoTrue bersama, tanpa
+    entry di access_roles) masih bisa baca customer_code+lat/lon toko AREA MANA
+    PUN lewat 4 pemanggil browser di src/ (exportPlan.ts, DashboardPage.tsx,
+    PlanMapPage.tsx, RoutingEnginePage.tsx)."""
+    _as_member(db_cursor, _random_uuid())
+    with pytest.raises(psycopg2.Error) as exc_info:
+        db_cursor.execute("select * from get_stores_by_area(%s::uuid)", (TANGERANG_KOTA_ID,))
+    assert _denied(exc_info.value)
+
+
+def test_get_stores_by_area_service_role_context_member_passes(db_cursor):
+    """Persis pola /generate-plan,/stage1,/stage2: api.py panggil via service_role
+    (auth.uid() NULL), meneruskan user_id terverifikasi sbg p_caller_id."""
+    _as_anonymous_session(db_cursor)
+    db_cursor.execute(
+        "select * from get_stores_by_area(%s::uuid, %s::uuid)", (TANGERANG_KOTA_ID, JKS_ADMIN_ID)
+    )
+    rows = db_cursor.fetchall()
+    assert len(rows) > 0
+
+
+def test_get_stores_by_area_service_role_context_non_member_rejected(db_cursor):
+    """CELAH C1 (sebelum fix): user non-JKS yg curl /stage1,/stage2,/generate-plan
+    langsung (bypass browser) -- api.py meneruskan user_id mereka sbg p_caller_id,
+    HARUS ditolak di dalam get_stores_by_area, walau api.py panggil via service_role."""
+    _as_anonymous_session(db_cursor)
+    with pytest.raises(psycopg2.Error) as exc_info:
+        db_cursor.execute(
+            "select * from get_stores_by_area(%s::uuid, %s::uuid)", (TANGERANG_KOTA_ID, _random_uuid())
+        )
+    assert _denied(exc_info.value)

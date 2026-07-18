@@ -324,7 +324,7 @@ def generate_plan(
     db = _db()
 
     # ── Load stores ────────────────────────────────────────────────────────────
-    stores_res = db.rpc("get_stores_by_area", {"p_area_id": req.area_id}).execute()
+    stores_res = db.rpc("get_stores_by_area", {"p_area_id": req.area_id, "p_caller_id": user_id}).execute()
     raw_stores: list[dict] = stores_res.data or []
     if not raw_stores:
         raise HTTPException(400, "Belum ada toko aktif untuk area ini")
@@ -762,7 +762,7 @@ def stage2(
     """
     db = _db()
 
-    stores_res = db.rpc("get_stores_by_area", {"p_area_id": req.area_id}).execute()
+    stores_res = db.rpc("get_stores_by_area", {"p_area_id": req.area_id, "p_caller_id": user_id}).execute()
     raw_stores: list[dict] = stores_res.data or []
     if not raw_stores:
         raise HTTPException(400, "Belum ada toko aktif untuk area ini")
@@ -826,7 +826,7 @@ def stage1(
     """
     db = _db()
 
-    stores_res = db.rpc("get_stores_by_area", {"p_area_id": req.area_id}).execute()
+    stores_res = db.rpc("get_stores_by_area", {"p_area_id": req.area_id, "p_caller_id": user_id}).execute()
     raw_stores: list[dict] = stores_res.data or []
     if not raw_stores:
         raise HTTPException(400, "Belum ada toko aktif untuk area ini")
