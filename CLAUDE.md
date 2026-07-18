@@ -155,20 +155,20 @@ python -m pytest tests/ -v
       pemilik** via SQL Editor mereka. Lihat `docs/incident-2026-07-17/ADDENDUM_gap_0398.md`.
 
 **Wajib sebelum trial dibuka luas:**
-- [~] **C1 — otorisasi area di `api.py`** — **jalur TULIS ditutup, jalur BACA masih terbuka.** (2026-07-17)
-      Guard `auth.uid()`/`COALESCE(auth.uid(),p_created_by)` LIVE di `get_my_profile` + 5 RPC mutasi
-      (`approve_plan`/`discard_plan`/`save_plan`/`stage_stores`/`upsert_stores`) — `0003_guard_authz_rpc.sql`
-      + `0004_fix_save_plan_service_role_guard.sql` (regresi service_role ditemukan & diperbaiki hari
-      yang sama). Diverifikasi HTTP sungguhan: JKS lolos, user Heroes asli (Putri) ditolak `42501` baik
-      via browser maupun service_role. `save_plan` (jalur `/generate-plan` dry_run=false) kini aman.
-      ⚠️ **`get_stores_by_area` — TIDAK ikut ter-guard, dan MASIH BOCOR.** Dipanggil via service_role
-      di `api.py:327,765,829` (`/generate-plan`,`/stage1`,`/stage2`), nol guard di DB (dikonfirmasi:
-      `prosrc` tak mengandung "Akses ditolak"). Fungsi ini cuma terima `p_area_id` — beda dari
-      `save_plan`, TIDAK punya parameter identitas pemanggil (`p_created_by`) utk fallback, jadi pola
-      fix yang sama tak langsung berlaku. User Heroes mana pun (JWT valid dari GoTrue bersama) masih
-      bisa `curl` ketiga endpoint itu dan membaca `customer_code`+lat/lon toko area MANA PUN.
-      **Perbaikan kemungkinan perlu di level `api.py`** (cek membership stlh `_verify_jwt`, SEBELUM
-      panggil `get_stores_by_area`) — bukan migrasi SQL, perlu redeploy. **BELUM dikerjakan.**
+- [x] ~~C1 — otorisasi area di `api.py`~~ — **SELESAI, jalur TULIS dan BACA tertutup** (2026-07-17).
+      Guard `auth.uid()`/`COALESCE(auth.uid(),p_created_by|p_caller_id)` LIVE di `get_my_profile` +
+      5 RPC mutasi (`0003`+`0004`) + `get_stores_by_area` (`0005_guard_get_stores_by_area.sql`).
+      `get_stores_by_area` beda pola dari `save_plan` — tak punya parameter identitas existing, jadi
+      ditambah `p_caller_id uuid DEFAULT NULL` (default → 4 pemanggil browser di `src/` TAK PERLU
+      diubah; hanya 3 call-site `api.py` yg update kirim `p_caller_id=user_id`). Ranjau: `CREATE OR
+      REPLACE` dgn jumlah parameter beda TIDAK mengganti fungsi lama — menambah overload baru, bikin
+      panggilan 1-argumen ambigu; perlu `DROP FUNCTION` eksplisit dulu.
+      Dikerjakan **test-first**: `tests/test_rpc_authz.py` (19 test) ditulis SEBELUM fix, dikonfirmasi
+      3 test gagal thd kode lama (celah nyata & terdeteksi otomatis) sebelum implementasi.
+      Deploy terkoordinasi (migrasi DB + `api.py` + Cloud Run) — commit dulu, apply migrasi (window
+      singkat `/stage1`,`/stage2`,`/generate-plan` error krn kode lama blm tau `p_caller_id`), push
+      segera, verifikasi ulang via `/stage1` sungguhan (5 wilayah, ~1567 toko) → kode baru live &
+      benar. Semua 19 test hijau pasca-deploy.
 - [ ] **H1 — validasi `ROUTE_ENGINE_SECRET`** (catatan: Edge Function pengirimnya = jalur mati; browser
       panggil FastAPI langsung, jadi shared-secret tak cocok utk jalur nyata — pertimbangkan ulang).
 

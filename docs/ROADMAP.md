@@ -19,7 +19,7 @@
 - ✅ Engine: BLOCKING + TRAFFIC, penjadwalan hari **murni K-Means**, deterministik,
   **no-network**, fail-loud.
 - ✅ Deploy: Cloud Run **deploy-dari-git** (`master` → auto build+deploy).
-- ⚠️ **AUDIT C1/H1 masih terbuka** (lihat §Lintas-isu).
+- ✅ **C1 selesai** (2026-07-17, sesi 12) — guard otorisasi 7 RPC + 19 test regresi. ⚠️ **H1 masih terbuka** (lihat §Lintas-isu).
 
 ## Prinsip yang dijaga
 
@@ -45,7 +45,7 @@
 | D | **Mapping ke kode sales real** (SLS-02 → kode nyata) | Tinggi (rollout) | M | — |
 | E | **Optimasi rute road-aware** (OSM/Google) | Realism tertinggi | L | — |
 | F | **Filosofi objektif engine** (balance/pekan/kapasitas) — keputusan & penundaan | Dokumentasi | — | E + data |
-| — | AUDIT C1/H1 (keamanan) | **WAJIB pra-trial** | S–M | — |
+| — | AUDIT H1 (engine secret; C1 ✅ selesai) | **WAJIB pra-trial** | S | — |
 
 Effort: **S** ≈ <1 sesi, **M** ≈ 1–2 sesi, **L** ≈ 3+ sesi.
 
@@ -222,25 +222,23 @@ pekan-berat/pekan-ringan?** → operasional, bukan algoritmik.
 
 ## Lintas-isu — WAJIB sebelum trial luas
 
-- **C1 — Otorisasi di API.** ⚠️ **Status 2026-07-17 (sesi 12, malam): jalur TULIS ditutup, jalur BACA
-  MASIH BOCOR.** DB Supabase ini **dipakai bersama** project nabati-heroes (~82 user aktif, login harian).
-  `_verify_jwt` (`api.py:111`) hanya `db.auth.get_user(token)` → memvalidasi token ke GoTrue project
-  **yang sama** → **JWT user aplikasi LAIN lolos**.
-  **Sudah ditutup (level DB):** guard `auth.uid()`/`COALESCE(auth.uid(),p_created_by)` LIVE di
-  `get_my_profile` + 5 RPC mutasi (`approve_plan`/`discard_plan`/`save_plan`/`stage_stores`/
-  `upsert_stores`) — `supabase/migrations/0003_guard_authz_rpc.sql` + `0004_fix_save_plan_service_role_guard.sql`
-  (regresi `save_plan` via service_role ditemukan & diperbaiki hari yang sama). Terverifikasi HTTP
-  sungguhan: user nabati-heroes (Putri) ditolak `42501`, ADMIN JKS lolos. `/generate-plan` (dry_run=false,
-  **MENULIS** plan) kini aman. **Regresi tak akan lagi lolos senyap** — `tests/test_rpc_authz.py`
-  (15 test, integrasi ke DB live via transaksi rollback) mengunci perilaku ini; dikonfirmasi test
-  tsb GAGAL kalau versi pra-`0004` diterapkan ulang (lihat commit test).
-  **MASIH TERBUKA:** `get_stores_by_area` (dipanggil service_role di `api.py:327,765,829` untuk
-  `/generate-plan`,`/stage1`,`/stage2`) **tak ter-guard** — nol cek membership. Beda dari `save_plan`,
-  fungsi ini hanya terima `p_area_id`, tak ada parameter identitas pemanggil utk fallback pola
-  `COALESCE`. User nabati-heroes mana pun masih bisa baca seluruh toko area mana pun (`customer_code`
-  + lat/lon) via ketiga endpoint itu. **Perbaikan kemungkinan di level `api.py`** (cek membership
-  setelah `_verify_jwt`, sebelum panggil `get_stores_by_area`) — bukan migrasi SQL, perlu redeploy.
-  BELUM dikerjakan.
+- **C1 — Otorisasi di API.** ✅ **SELESAI 2026-07-17 (sesi 12) — jalur TULIS dan BACA tertutup.**
+  DB Supabase ini **dipakai bersama** project nabati-heroes (~1300 akun aktif, login harian).
+  `_verify_jwt` (`api.py:111`) hanya `db.auth.get_user(token)` → menerima JWT **siapa pun** dari
+  GoTrue bersama — celah ini kini ditutup di level DB (bukan di `_verify_jwt` itu sendiri).
+  **Guard `auth.uid()`/`COALESCE(auth.uid(), p_created_by|p_caller_id)` LIVE di 7 RPC:** `get_my_profile`
+  + 5 mutasi (`approve_plan`/`discard_plan`/`save_plan`/`stage_stores`/`upsert_stores` — `0003`+`0004`,
+  regresi `save_plan` via service_role ditemukan & diperbaiki hari yang sama) + `get_stores_by_area`
+  (`0005_guard_get_stores_by_area.sql`, jalur baca). `get_stores_by_area` tak punya parameter identitas
+  seperti `save_plan` — ditambah `p_caller_id uuid DEFAULT NULL`; default berarti 4 pemanggil browser
+  di `src/` tak perlu diubah, hanya 3 call-site `api.py` yg update. Ranjau: `CREATE OR REPLACE` beda
+  jumlah parameter menambah OVERLOAD, bukan mengganti — perlu `DROP FUNCTION` eksplisit dulu.
+  Terverifikasi HTTP sungguhan: user nabati-heroes (Putri) ditolak `42501` via browser & service_role;
+  `/stage1` sungguhan pasca-deploy mengembalikan 5 wilayah (~1567 toko) — bukti kode+DB baru live & benar.
+  **Regresi tak akan lagi lolos senyap** — `tests/test_rpc_authz.py` (19 test, integrasi ke DB live via
+  transaksi rollback) mengunci seluruh perilaku ini, ditulis **test-first** (dikonfirmasi gagal thd
+  kode lama sebelum fix ada) dan dikonfirmasi mendeteksi regresi `save_plan` bila versi pra-`0004`
+  diterapkan ulang.
 - **H1 — Validasi engine secret.** `X-Engine-Secret`/`ROUTE_ENGINE_SECRET` belum divalidasi.
   ⚠️ Catatan sesi 12: **pengirimnya (Edge Function) = jalur MATI** — `RoutingEnginePage` `fetch()`
   langsung browser→FastAPI, tak pernah `functions.invoke`. Shared-secret tak cocok untuk jalur nyata
@@ -256,8 +254,7 @@ pekan-berat/pekan-ringan?** → operasional, bukan algoritmik.
 > Catatan: urutan ini **beda** dari urutan kamu menyebut item — silakan timpa sesuai
 > prioritas bisnis. Rasional di bawah.
 
-- **Fase 0 — Hardening (sekarang):** **C1/H1** (A ✅ selesai). Mengamankan pra-trial.
-  Tak menunda apa pun.
+- **Fase 0 — Hardening:** **H1** (A + C1 ✅ selesai). Mengamankan pra-trial. Tak menunda apa pun.
 - **Fase 1 — Iterasi plan:** **B (edit draft)**. Reuse editor yang baru jadi, nilai
   tinggi (plan jadi benar-benar bisa diolah ulang).
 - **Fase 2 — Siap lapangan:** **D (kode sales real)**. Infra DB sudah ada; wajib agar
