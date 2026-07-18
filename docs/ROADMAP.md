@@ -231,7 +231,9 @@ pekan-berat/pekan-ringan?** → operasional, bukan algoritmik.
   `upsert_stores`) — `supabase/migrations/0003_guard_authz_rpc.sql` + `0004_fix_save_plan_service_role_guard.sql`
   (regresi `save_plan` via service_role ditemukan & diperbaiki hari yang sama). Terverifikasi HTTP
   sungguhan: user nabati-heroes (Putri) ditolak `42501`, ADMIN JKS lolos. `/generate-plan` (dry_run=false,
-  **MENULIS** plan) kini aman.
+  **MENULIS** plan) kini aman. **Regresi tak akan lagi lolos senyap** — `tests/test_rpc_authz.py`
+  (15 test, integrasi ke DB live via transaksi rollback) mengunci perilaku ini; dikonfirmasi test
+  tsb GAGAL kalau versi pra-`0004` diterapkan ulang (lihat commit test).
   **MASIH TERBUKA:** `get_stores_by_area` (dipanggil service_role di `api.py:327,765,829` untuk
   `/generate-plan`,`/stage1`,`/stage2`) **tak ter-guard** — nol cek membership. Beda dari `save_plan`,
   fungsi ini hanya terima `p_area_id`, tak ada parameter identitas pemanggil utk fallback pola

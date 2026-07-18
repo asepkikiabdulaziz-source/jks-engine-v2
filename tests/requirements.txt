@@ -1,0 +1,7 @@
+# Dependency KHUSUS test integrasi di folder ini (tests/) -- terpisah dari
+# route_engine/requirements*.txt karena api.py sendiri pakai client `supabase`,
+# bukan psycopg2 mentah. psycopg2 hanya perlu untuk test yang butuh akses DB
+# langsung (mensimulasikan auth.uid() via set_config, sesuatu yang tak bisa
+# dilakukan lewat client supabase-py biasa).
+pytest>=8.0.0
+psycopg2-binary>=2.9.0

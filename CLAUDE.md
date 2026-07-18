@@ -129,8 +129,12 @@ npx tsc --noEmit --strict
 # Python syntax check
 python -c "import ast; ast.parse(open('api.py').read()); print('syntax OK')"
 
-# Tests
+# Tests — engine (algoritma partisi/jadwal, murni lokal, tanpa DB)
 cd route_engine && python -m pytest tests/ -v
+
+# Tests — otorisasi RPC (integrasi ke DB live, butuh SUPABASE_DB_URL di .env.local)
+# Semua dibungkus transaksi rollback -- nol tulis ke prod. pip install -r tests/requirements.txt
+python -m pytest tests/ -v
 ```
 
 ## Pending / Next Session
