@@ -137,6 +137,40 @@ pengguna, setelah mereka melihat `plan.html`:
 
 ---
 
+## 4b. Gladi bersih pada data nyata — apa yang wajar, apa yang akan ditanya
+
+Dijalankan 2026-08-04 pada satu area Nabati (2.293 toko, TX2DA, 5 sales, 6 hari,
+M2) diperlakukan seolah distributor kedua. **Runner tervalidasi:** ekspor ke CSV
+lalu baca ulang menghasilkan `version_id` yang **identik** dengan menjalankan
+engine langsung dari baris DB (`v1-b8f40008f91a`) — round-trip CSV tidak
+kehilangan satu digit pun.
+
+| | BLOCKING | TRAFFIC |
+|---|---|---|
+| toko/sales | 412–505 (sebar **20,3%**) | 434–483 (sebar **10,7%**) |
+| est. panjang rute | sebar **78,9%** | sebar **35,3%** |
+| QC flag | 8 toko | — |
+
+Waktu jalan: **~21 detik** untuk 2.293 toko, dua filosofi sekaligus. Cukup cepat
+untuk dijalankan langsung di depan calon.
+
+**Keberatan yang paling mungkin muncul, siapkan jawabannya:**
+
+> *"Kenapa jumlah tokonya rata tapi jarak tempuh salesman beda jauh?"*
+
+Sebar panjang rute **78,9%** di BLOCKING itu besar — satu salesman menempuh
+jarak jauh lebih panjang dari yang lain meski jumlah tokonya mirip. Ini bukan
+bug: engine menyeimbangkan **COUNT**, dan itu keputusan sadar yang terdokumentasi
+di [ROADMAP §F](../ROADMAP.md) ("adil kasat mata = sama jumlah"; balance jarak
+ditunda sampai ada data rute nyata).
+
+Jawab apa adanya, jangan dikaburkan. Dan catat reaksinya — kalau calon
+menganggap ini masalah serius, itu sinyal bahwa balance-jarak naik prioritas
+bersama OSRM. Perhatikan juga bahwa **TRAFFIC jauh lebih seimbang di kedua
+metrik** pada data ini; ada baiknya tunjukkan keduanya dan biarkan mereka memilih.
+
+---
+
 ## 5. Yang sengaja TIDAK diuji
 
 Supaya tesnya tetap murah dan jawabannya tetap jelas:
