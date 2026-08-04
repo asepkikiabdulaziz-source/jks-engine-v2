@@ -257,3 +257,88 @@ def test_get_stores_by_area_service_role_context_non_member_rejected(db_cursor):
             "select * from get_stores_by_area(%s::uuid, %s::uuid)", (TANGERANG_KOTA_ID, _random_uuid())
         )
     assert _denied(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# GRANT/ACL -- lapisan yang TAK SATU PUN test di atas menyentuh, dan justru di
+# situlah kebocoran nyata terjadi (migrasi 0006).
+#
+# Guard di dalam fungsi tak berarti apa-apa kalau fungsinya bisa dijangkau role
+# yang auth.uid()-nya NULL: COALESCE(auth.uid(), p_caller_id) lalu jatuh ke
+# parameter yang DIKENDALIKAN KLIEN. Terverifikasi bocor 371 baris ke `anon`
+# tanpa login sama sekali sebelum 0006.
+#
+# Kenapa ini WAJIB dijaga test, bukan sekadar diperbaiki sekali: Supabase memasang
+# ALTER DEFAULT PRIVILEGES ... GRANT EXECUTE ON FUNCTIONS TO anon, authenticated,
+# service_role di schema `public`. Jadi setiap DROP FUNCTION + CREATE berikutnya
+# MENGEMBALIKAN EXECUTE ke `anon` secara diam-diam. Persis itu yang terjadi di
+# 0005 -- satu-satunya migrasi yang memakai DROP (0003/0004 cuma CREATE OR REPLACE).
+# ---------------------------------------------------------------------------
+
+JKS_RPCS = [
+    "public.get_stores_by_area(uuid,uuid)",
+    "public.get_plans_by_area(uuid)",
+    "public.get_plan_assignments(uuid)",
+    "public.save_plan(uuid,uuid,text,jsonb,jsonb,jsonb,uuid,jsonb)",
+    "public.approve_plan(uuid,uuid)",
+    "public.discard_plan(uuid)",
+    "public.stage_stores(uuid,jsonb)",
+    "public.upsert_stores(uuid,jsonb)",
+]
+
+
+@pytest.mark.parametrize("rpc", JKS_RPCS)
+def test_rpc_not_executable_by_anon(db_cursor, rpc):
+    """Tak satu pun RPC JKS boleh dijangkau tanpa login.
+
+    `anon` = anon key, yang PUBLIK by design (api.py menyuntikkannya ke browser
+    lewat window.__ENV__). EXECUTE untuk anon = fungsi itu terbuka ke internet.
+    """
+    db_cursor.execute("select has_function_privilege('anon', %s, 'EXECUTE')", (rpc,))
+    assert db_cursor.fetchone()[0] is False, (
+        f"{rpc} bisa dieksekusi `anon` -- terbuka tanpa login. "
+        "Kemungkinan besar ada DROP FUNCTION baru: default privileges Supabase "
+        "mengembalikan EXECUTE ke anon. Tambahkan REVOKE (pola migrasi 0006)."
+    )
+
+
+@pytest.mark.parametrize("rpc", JKS_RPCS)
+def test_rpc_executable_by_authenticated_and_service_role(db_cursor, rpc):
+    """Sisi sebaliknya: REVOKE tak boleh kebablasan.
+
+    authenticated = pemanggil browser di src/; service_role = api.py.
+    Kalau salah satu hilang, aplikasi mati -- dan `REVOKE ... FROM public` yang
+    dijalankan tanpa GRANT eksplisit lebih dulu adalah cara paling mudah
+    membuatnya hilang.
+    """
+    for role in ("authenticated", "service_role"):
+        db_cursor.execute("select has_function_privilege(%s, %s, 'EXECUTE')", (role, rpc))
+        assert db_cursor.fetchone()[0] is True, f"{role} kehilangan EXECUTE pada {rpc}"
+
+
+def test_anon_cannot_read_stores_even_with_valid_member_uuid(db_cursor):
+    """Regresi atas kebocoran sesungguhnya (0006) -- jalur eksploitasi apa adanya.
+
+    Sebelum 0006 ini mengembalikan 371 baris: `anon` (tanpa sesi, auth.uid() NULL)
+    memasok UUID anggota JKS lewat p_caller_id, COALESCE memakainya, guard lolos.
+    UUID itu bukan rahasia -- ada di file ini, baris 42, di repo PUBLIK.
+
+    Beda dari test has_function_privilege di atas: yang ini menjalankan serangannya,
+    bukan memeriksa metadata. Keduanya perlu -- ACL bisa benar tapi fungsi diganti,
+    atau sebaliknya.
+    """
+    db_cursor.execute("savepoint anon_probe")
+    _as_anonymous_session(db_cursor)
+    db_cursor.execute("set local role anon")
+    try:
+        with pytest.raises(psycopg2.Error) as exc_info:
+            db_cursor.execute(
+                "select count(*) from public.get_stores_by_area(%s::uuid, %s::uuid)",
+                (TANGERANG_KOTA_ID, JKS_ADMIN_ID),
+            )
+        assert "permission denied" in str(exc_info.value).lower(), (
+            "anon harus ditolak di level GRANT, sebelum guard di dalam fungsi sempat jalan"
+        )
+    finally:
+        db_cursor.execute("rollback to savepoint anon_probe")
+        db_cursor.execute("reset role")
