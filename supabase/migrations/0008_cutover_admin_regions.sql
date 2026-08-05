@@ -375,6 +375,28 @@ AS $function$
 $function$;
 
 -- ============================================================================
+-- 4b. ACL -- pelajaran 0006 diterapkan DI TEMPAT fungsinya dibuat ulang
+-- ============================================================================
+-- CREATE OR REPLACE tidak mengubah ACL fungsi yang SUDAH ADA -- tapi ketiganya
+-- di atas TIDAK ADA satu pun migrasi kita sendiri yang PERNAH menuliskan grant
+-- eksplisit untuknya (0001 cuma dump definisi, bukan ACL). Di prod mereka
+-- terlihat aman HANYA karena menumpang sapuan keamanan project lain (lihat
+-- 0010_harden_all_rpc_acl.sql utk detail lengkap temuan ini). Direplay ke DB
+-- kosong tanpa baris ini, stage_stores/commit_staging/preview_geocode_summary
+-- lahir EXECUTE-TO-ANON lewat default privileges Supabase.
+--
+-- preview_geocode_summary: nol pemanggil terverifikasi (src/, api.py, scripts/)
+-- -- diperlakukan sbg orphan, service_role saja, BUKAN authenticated. Kalau
+-- kelak dipakai browser, tambahkan grant authenticated eksplisit saat itu.
+GRANT  EXECUTE ON FUNCTION public.stage_stores(uuid, jsonb)      TO authenticated;
+GRANT  EXECUTE ON FUNCTION public.commit_staging(uuid)           TO authenticated;
+GRANT  EXECUTE ON FUNCTION public.preview_geocode_summary(jsonb) TO service_role;
+
+REVOKE EXECUTE ON FUNCTION public.stage_stores(uuid, jsonb)      FROM anon, public;
+REVOKE EXECUTE ON FUNCTION public.commit_staging(uuid)           FROM anon, public;
+REVOKE EXECUTE ON FUNCTION public.preview_geocode_summary(jsonb) FROM anon, authenticated, public;
+
+-- ============================================================================
 -- 5. BACKFILL 22.674 toko yang sudah ada
 -- ============================================================================
 -- Pola Pass 1 + Pass 2 yang sama. Hasil yang diharapkan (dari verifikasi):
@@ -399,19 +421,32 @@ BEGIN
     AND ST_Within(ST_SetSRID(ST_MakePoint(s.longitude, s.latitude), 4326), a.geom);
   GET DIAGNOSTICS v_pass1 = ROW_COUNT;
 
+  -- ⚠️ UPDATE ... FROM LATERAL (...) TIDAK BISA mereferensikan alias TARGET
+  -- update (di sini "s") langsung di dalam subquery LATERAL -- itu bukan
+  -- "preceding from_item" yang sah bagi LATERAL, beda dari SELECT biasa.
+  -- Postgres menolak dgn "invalid reference to FROM-clause entry for table s"
+  -- (diverifikasi langsung, Docker lokal, 2026-08-05). stage_stores (Pass 2)
+  -- TIDAK kena bug ini karena sudah lebih dulu memakai pola CTE+alias yang
+  -- benar (to_geocode tg) -- pola yang sama dipakai ulang di sini.
+  WITH to_geocode AS (
+    SELECT id, longitude, latitude
+    FROM jks_engine.stores
+    WHERE adm3_pcode IS NULL
+      AND latitude IS NOT NULL AND longitude IS NOT NULL
+  )
   UPDATE jks_engine.stores s
   SET gadm_provinsi = a.adm1_name, gadm_kota = a.adm2_name,
       gadm_kecamatan = a.adm3_name, gadm_kelurahan = a.adm4_name,
       adm3_pcode = a.adm3_pcode, adm4_pcode = a.adm4_pcode
-  FROM LATERAL (
+  FROM to_geocode tg
+  CROSS JOIN LATERAL (
     SELECT adm1_name, adm2_name, adm3_name, adm4_name, adm3_pcode, adm4_pcode
     FROM jks_engine.admin_regions
-    WHERE geom && ST_Expand(ST_SetSRID(ST_MakePoint(s.longitude, s.latitude), 4326), 0.01)
-    ORDER BY geom <-> ST_SetSRID(ST_MakePoint(s.longitude, s.latitude), 4326)
+    WHERE geom && ST_Expand(ST_SetSRID(ST_MakePoint(tg.longitude, tg.latitude), 4326), 0.01)
+    ORDER BY geom <-> ST_SetSRID(ST_MakePoint(tg.longitude, tg.latitude), 4326)
     LIMIT 1
   ) a
-  WHERE s.adm3_pcode IS NULL
-    AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL;
+  WHERE s.id = tg.id;
   GET DIAGNOSTICS v_pass2 = ROW_COUNT;
 
   SELECT COUNT(*) INTO v_sisa

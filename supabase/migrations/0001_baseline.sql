@@ -46,6 +46,17 @@ alter table jks_engine.gadm_provinsi add constraint gadm_provinsi_pkey PRIMARY K
 
 
 -- --- gadm_regions ---
+-- SEQUENCE dibuat eksplisit di sini -- scripts/dump_baseline.py introspeksi via
+-- information_schema (pg_dump tak tersedia saat baseline ini dibuat), yang
+-- menangkap default kolom sudah ter-resolve sbg nextval(...) TAPI TIDAK
+-- menangkap pernyataan CREATE SEQUENCE yang mendasarinya -- keduanya adalah
+-- objek terpisah di katalog Postgres. Ditemukan 2026-08-05 saat replay ke DB
+-- kosong sungguhan (Docker lokal): "relation gadm_regions_id_seq does not
+-- exist". Tak pernah ketahuan sebelumnya karena baseline ini belum pernah
+-- benar-benar di-replay ke DB kosong -- persis kelas bug "git != prod" yang
+-- CLAUDE.md sendiri sudah wanti-wanti soal snapshot introspeksi.
+create sequence if not exists jks_engine.gadm_regions_id_seq;
+
 create table if not exists jks_engine.gadm_regions (
   id integer not null default nextval('jks_engine.gadm_regions_id_seq'::regclass),
   name_1 text not null,
@@ -60,6 +71,7 @@ create table if not exists jks_engine.gadm_regions (
   gid_4 text,
   type_4 text
 );
+alter sequence jks_engine.gadm_regions_id_seq owned by jks_engine.gadm_regions.id;
 alter table jks_engine.gadm_regions add constraint gadm_regions_pkey PRIMARY KEY (id);
 CREATE INDEX idx_gadm_regions_geom ON jks_engine.gadm_regions USING gist (geom);
 CREATE UNIQUE INDEX idx_gadm_regions_gid4 ON jks_engine.gadm_regions USING btree (gid_4);
@@ -87,7 +99,11 @@ create table if not exists jks_engine.plan_assignments (
   qc_flag text,
   version_id text not null
 );
-alter table jks_engine.plan_assignments add constraint plan_assignments_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES jks_engine.plans(id) ON DELETE CASCADE;
+-- FK ke jks_engine.plans DIPINDAH ke bawah definisi tabel plans (lihat sana) --
+-- dump_baseline.py menulis tabel URUT ALFABET ("plan_assignments" < "plans"),
+-- tanpa mengurutkan berdasarkan ketergantungan FK. Replay ke DB kosong gagal
+-- persis di sini: "relation jks_engine.plans does not exist" (ditemukan
+-- 2026-08-05, Docker lokal) -- constraint FK butuh tabel tujuannya SUDAH ada.
 alter table jks_engine.plan_assignments add constraint plan_assignments_pkey PRIMARY KEY (id);
 CREATE INDEX jks_pa_plan_idx ON jks_engine.plan_assignments USING btree (plan_id);
 CREATE INDEX jks_pa_div_idx ON jks_engine.plan_assignments USING btree (plan_id, div_sls);
@@ -116,6 +132,10 @@ alter table jks_engine.plans add constraint plans_created_by_fkey FOREIGN KEY (c
 alter table jks_engine.plans add constraint plans_pkey PRIMARY KEY (id);
 CREATE INDEX jks_plans_area_idx ON jks_engine.plans USING btree (area_id, created_at DESC);
 CREATE INDEX idx_plans_area_status ON jks_engine.plans USING btree (area_id, status, created_at DESC);
+
+-- FK dari plan_assignments -- dipindah ke sini (bukan di dekat definisi tabelnya
+-- sendiri) SUPAYA jks_engine.plans sudah ada saat constraint ini dievaluasi.
+alter table jks_engine.plan_assignments add constraint plan_assignments_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES jks_engine.plans(id) ON DELETE CASCADE;
 
 
 -- --- stores ---

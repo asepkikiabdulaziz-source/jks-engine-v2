@@ -9,6 +9,7 @@ Usage:
     python scripts/run_migrations.py            # apply migrasi yang belum tercatat
     python scripts/run_migrations.py --dry-run  # tampilkan yang AKAN dijalankan, tanpa eksekusi
 """
+import os
 import sys
 from pathlib import Path
 
@@ -19,11 +20,18 @@ MIGRATIONS_DIR = ROOT / "supabase" / "migrations"
 
 
 def load_db_url() -> str:
+    # Env var didahulukan -- dipakai utk mengarahkan runner ke DB LOKAL (docker,
+    # lihat scripts/local-dev/) tanpa pernah membaca atau menyentuh .env.local
+    # (yang berisi kredensial DB BERSAMA/prod). Tanpa jalur ini, satu-satunya
+    # cara menguji migrasi secara lokal adalah menimpa .env.local sementara --
+    # berisiko lupa dikembalikan sebelum migrasi berikutnya dijalankan sungguhan.
+    if os.environ.get("SUPABASE_DB_URL"):
+        return os.environ["SUPABASE_DB_URL"]
     env_file = ROOT / ".env.local"
     for line in env_file.read_text(encoding="utf-8", errors="replace").splitlines():
         if line.startswith("SUPABASE_DB_URL="):
             return line.split("=", 1)[1].strip().strip('"').strip("'")
-    raise SystemExit("SUPABASE_DB_URL tidak ditemukan di .env.local")
+    raise SystemExit("SUPABASE_DB_URL tidak ditemukan di .env.local (atau env var)")
 
 
 def main():

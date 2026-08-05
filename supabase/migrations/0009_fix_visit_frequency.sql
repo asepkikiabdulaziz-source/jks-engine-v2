@@ -395,6 +395,20 @@ END;
 $function$;
 
 -- ============================================================================
+-- 5b. ACL -- upsert_stores TAK PERNAH dapat grant eksplisit sejak 0001
+-- ============================================================================
+-- Sama seperti stage_stores/commit_staging di 0008: 0001 cuma dump definisi,
+-- bukan ACL, dan tak ada migrasi manapun sebelum ini yang menuliskan grant utk
+-- upsert_stores. Direplay ke DB kosong, ia lahir EXECUTE-TO-ANON lewat default
+-- privileges Supabase. upsert_stores ORPHAN (nol pemanggil terverifikasi di
+-- src/, api.py, scripts/ -- lihat 0010_harden_all_rpc_acl.sql), jadi diberi
+-- service_role saja, BUKAN authenticated -- kalau kelak dipakai browser,
+-- tambahkan grant authenticated eksplisit saat itu, jangan biarkan terbuka
+-- duluan "buat jaga-jaga".
+GRANT  EXECUTE ON FUNCTION public.upsert_stores(uuid, jsonb) TO service_role;
+REVOKE EXECUTE ON FUNCTION public.upsert_stores(uuid, jsonb) FROM anon, authenticated, public;
+
+-- ============================================================================
 -- 6. ASERSI
 -- ============================================================================
 DO $$
