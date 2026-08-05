@@ -92,8 +92,19 @@ def balanced_partition(
     Return: {customer_code -> sales_index 0..n-1}.
 
     tolerance: batas kerataan ±X per cluster dari rata-rata (default 0.10 = ±10%).
-    v1 selalu menggunakan COUNT. ROUTE_LENGTH diterima tapi diperlakukan sama.
+
+    criterion: hanya COUNT yang diimplementasi. Nilai lain DITOLAK — lihat
+    BalanceCriterion. `PlanConfig` sudah menolaknya lebih awal, tapi fungsi ini
+    juga bisa dipanggil LANGSUNG (scheduling.py, api.py, dan siapa pun yang
+    memakai route_engine sebagai paket), jadi gerbangnya dipasang di sini juga.
     """
+    if criterion is not BalanceCriterion.COUNT:
+        raise NotImplementedError(
+            f"balanced_partition: criterion={criterion.value} belum diimplementasi. "
+            "Hanya COUNT yang tersedia. Menerimanya lalu diam-diam memakai COUNT "
+            "adalah penyimpangan senyap — Prinsip 1 & 3."
+        )
+
     items = sorted(stores, key=lambda s: s.customer_code)  # kanonik
     n_total = len(items)
 

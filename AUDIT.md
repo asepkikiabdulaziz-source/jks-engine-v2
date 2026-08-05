@@ -52,7 +52,7 @@ Engine inti **matang & patuh filosofi** (diperkuat kerja sesi pembalikan prinsip
 | M2 | Input tak dibatasi: `depo_lat/lon` tanpa bound; `divisions` & `customer_codes` tanpa `max_items` | `api.py` (model request) | Risiko DoS (mis. 10.000 divisi) / koordinat ekstrem. Catatan: `n_sales` & `work_days` **sudah** dibatasi. Tambah bound lat/lon (-90..90 / -180..180) + `max_items`. |
 | M3 | `requirements-api.txt` pakai `>=` (tak di-pin) | `route_engine/requirements-api.txt` | Inkonsisten dengan determinisme yang ditegakkan di `requirements.txt`. Pin ke `==`. |
 | M4 | `python-dotenv` di-import tetapi tak dideklarasikan + fallback senyap | `start_engine.py` | **Pola "fallback senyap" yang dilarang spec §2** (lihat kerja sesi ini). Deklarasikan sebagai dependency + gagal jelas bila absen. |
-| M5 | `balance_criterion=ROUTE_LENGTH` diterima tapi **diam-diam diperlakukan COUNT** | `route_engine/core/partition.py` | **Penyimpangan senyap** — anti-pola yang baru diberantas di engine. Minimal tolak eksplisit bila belum didukung. |
+| M5 | ~~`balance_criterion=ROUTE_LENGTH` diterima tapi **diam-diam diperlakukan COUNT**~~ | `route_engine/core/partition.py` | ✅ **SELESAI 2026-08-05.** Ditolak `NotImplementedError` di DUA gerbang: `PlanConfig.__post_init__` (paling awal) + `balanced_partition()` (jalur pemanggilan langsung). 7 test regresi di `test_balance_criterion.py`. Efek samping yg ikut tertutup: `_version_id` mem-hash `balance_criterion.value`, jadi plan ROUTE_LENGTH dulu dapat version_id BERBEDA padahal keluarannya identik byte-per-byte. |
 | M6 | Model lock TRAFFIC = BLOCKING (dua lock), padahal spec §4B = satu lock | `route_engine/engine.py` (Plan class) | `lock_territory()` tak bermakna di TRAFFIC; tak ada validasi philosophy-specific. Juga: `# TODO confirm` granularitas adjust TRAFFIC (§12) belum ada di kode. |
 | M7 | RPC tanpa `.catch()`; `Promise.all` tanpa catch | `src/context/AreaContext.tsx:51-74`, `src/pages/DashboardPage.tsx:239` | Dropdown/area kosong senyap saat network error. Tambah handler + state error. |
 | M8 | Race condition double-click "Generate Jadwal" | `src/pages/RoutingEnginePage.tsx:1357` | Dua fetch overlap → state korup. Disable tombol saat request in-flight. |
@@ -92,7 +92,7 @@ Engine inti **matang & patuh filosofi** (diperkuat kerja sesi pembalikan prinsip
 
 **Konsistensi filosofi (penyimpangan senyap — selaras kerja sesi ini):**
 - [ ] M4 — `python-dotenv` deklarasi eksplisit + fail jelas
-- [ ] M5 — `ROUTE_LENGTH` tolak eksplisit (jangan diam-diam jadi COUNT)
+- [x] ~~M5 — `ROUTE_LENGTH` tolak eksplisit~~ — **SELESAI 2026-08-05** (dua gerbang + 7 test)
 
 **Verifikasi yang tertunda:**
 - [ ] M1 — buktikan RLS/policy & otorisasi RPC SECURITY DEFINER via security advisor DB

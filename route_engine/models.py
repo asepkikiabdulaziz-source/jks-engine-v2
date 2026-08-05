@@ -26,8 +26,26 @@ class Philosophy(str, Enum):
 
 
 class BalanceCriterion(str, Enum):
-    COUNT        = "COUNT"         # v1 — seimbangkan jumlah toko
-    ROUTE_LENGTH = "ROUTE_LENGTH"  # v2 — seimbangkan estimasi panjang rute (belum impl)
+    """
+    Kriteria penyeimbangan partisi.
+
+    ⚠️ ROUTE_LENGTH **BELUM DIIMPLEMENTASI** dan akan DITOLAK — bukan diterima
+    lalu diam-diam diperlakukan sebagai COUNT. Sampai perubahan ini, memilihnya
+    menghasilkan partisi COUNT tanpa ada yang memberi tahu; pemanggil mengira
+    beban seimbang menurut panjang rute padahal menurut jumlah toko.
+
+    Efek sampingnya lebih halus: `engine._version_id()` mem-hash
+    `balance_criterion.value`, jadi plan ROUTE_LENGTH mendapat version_id BERBEDA
+    padahal keluarannya identik byte-per-byte — kontrak "input sama → id sama"
+    bocor ke arah sebaliknya.
+
+    Anggotanya sengaja DIPERTAHANKAN, bukan dihapus: ia menandai arah yang memang
+    direncanakan (ROADMAP §F, "balance jarak/waktu" — terbuka kembali begitu beban
+    terukur dalam jam). Menghapusnya menghilangkan sinyal itu; membiarkannya
+    diterima diam-diam jauh lebih buruk lagi.
+    """
+    COUNT        = "COUNT"         # satu-satunya yang diimplementasi
+    ROUTE_LENGTH = "ROUTE_LENGTH"  # DITOLAK — lihat balanced_partition()
 
 
 class TrafficCenter(str, Enum):
@@ -72,6 +90,17 @@ class PlanConfig:
     depo_id:            str              = "DEPO"
     base_name:          str              = "SALES"
     random_state:       int              = 42    # tetap — input sama → output sama
+
+    def __post_init__(self) -> None:
+        # Tolak di batas PALING AWAL — saat config dibuat, bukan setelah partisi
+        # berjalan dan hasilnya sudah terlanjur dipakai. Lihat BalanceCriterion.
+        if self.balance_criterion is not BalanceCriterion.COUNT:
+            raise NotImplementedError(
+                f"balance_criterion={self.balance_criterion.value} belum diimplementasi. "
+                "Hanya COUNT yang tersedia. Sebelumnya nilai ini DITERIMA lalu diam-diam "
+                "diperlakukan sebagai COUNT — plan tampak seimbang menurut kriteria yang "
+                "tidak pernah dipakai."
+            )
 
 
 # ── Output ─────────────────────────────────────────────────────────────────────
