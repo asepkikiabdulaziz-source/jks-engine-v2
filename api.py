@@ -102,10 +102,44 @@ def _db() -> Client:
 
 
 def _store_visit_freq(raw_val) -> VisitFrequency:
-    """Map DB visit_frequency value → enum. Default BIWEEKLY."""
-    if raw_val and str(raw_val).upper() == "WEEKLY":
+    """
+    Map nilai visit_frequency dari DB → enum engine.
+
+    GAGAL KERAS untuk nilai tak dikenal. Versi lama diam-diam mengembalikan
+    BIWEEKLY untuk APA PUN yang bukan "WEEKLY" — dan itulah yang membuat bug
+    terbesar di proyek ini hidup di produksi tanpa terdeteksi: kolom DB berisi
+    '1' (= MINGGUAN dalam pengkodean Nabati), tak pernah cocok dengan "WEEKLY",
+    jadi SELURUH 22.674 toko diperlakukan dua-mingguan dan 20.537 assignment
+    dijadwalkan pada separuh frekuensi yang seharusnya — termasuk 2 plan APPROVED.
+
+    Tak satu pun test menangkapnya, karena tak ada yang untuk ditangkap: kodenya
+    "berhasil" mengembalikan nilai yang salah. Default senyap tidak punya mode
+    kegagalan; ia hanya punya hasil yang salah.
+
+    Sejak migrasi 0009, DB dijamin kanonik lewat CHECK constraint, jadi cabang
+    ValueError di bawah seharusnya mustahil tercapai. Ia tetap ada justru karena
+    itu — kalau suatu saat tercapai, ada asumsi yang runtuh dan kita ingin
+    MENDENGARNYA, bukan diam-diam menjadwalkan separuh kunjungan lagi.
+    """
+    if raw_val is None or str(raw_val).strip() == "":
+        # Kolom NOT NULL sejak 0009; ini berarti pemanggil melewatkan field-nya.
+        return VisitFrequency.BIWEEKLY
+
+    val = str(raw_val).strip().upper()
+    if val == "WEEKLY":
         return VisitFrequency.WEEKLY
-    return VisitFrequency.BIWEEKLY
+    if val == "BIWEEKLY":
+        return VisitFrequency.BIWEEKLY
+
+    # HTTPException, bukan ValueError: api.py transport layer, dan pesan ini harus
+    # SAMPAI ke operator. ValueError jadi 500 kosong — loud tapi bisu, dan bisu
+    # adalah separuh dari masalah aslinya.
+    raise HTTPException(
+        500,
+        f"visit_frequency tidak dikenali: {raw_val!r}. "
+        "Nilai kanonik: WEEKLY | BIWEEKLY (label tampilan: 4/4 | 2/4). "
+        "Jalankan migrasi 0009 kalau DB masih menyimpan kode tenant seperti '1'.",
+    )
 
 
 def _verify_jwt(authorization: str = Header(default="")) -> str:
