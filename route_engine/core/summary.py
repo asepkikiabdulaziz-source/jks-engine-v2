@@ -6,12 +6,19 @@
 # manajer melihat ketimpangan jarak walau pemotongan v1 pakai count.
 #
 # Semua beban dihitung lewat estimator.load_score (pintu tunggal upgrade tier).
+#
+# Contiguity (lihat core/contiguity.py) dihitung HANYA per_sales — atas seluruh
+# toko satu teritori lintas-hari — karena itulah unit yang dimaksud literatur
+# districting ("compact AND connected TERRITORIES"). Sengaja TIDAK dihitung per
+# per_day: blok satu-hari adalah irisan lanjutan dari teritori yang sudah
+# terbentuk, bukan unit "wilayah" yang dimaksud kendala connectivity.
 # ==============================================================================
 from __future__ import annotations
 
 from collections import defaultdict
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from .contiguity import contiguity_score
 from .estimator import load_score
 
 
@@ -50,6 +57,10 @@ def build_summary(
             "sales": sales,
             **{k: (round(v, 4) if isinstance(v, float) else v)
                for k, v in load_score(stores, start=start, road_factor=road_factor).items()},
+            # Diukur & dilaporkan, TIDAK dipaksa sebagai kendala K-Means — lihat
+            # core/contiguity.py. n_islands > 1 = tanda untuk mata manusia
+            # memeriksa peta, bukan penolakan otomatis.
+            "contiguity": contiguity_score(stores),
         }
         for sales, stores in sorted(by_sales.items())
     ]
@@ -66,6 +77,10 @@ def build_summary(
 
     counts  = [p["count"] for p in per_sales]
     lengths = [p["est_route_length"] for p in per_sales]
+    # Roll-up di level atas supaya "berapa teritori bermasalah" terlihat tanpa
+    # membuka tiap baris per_sales satu-satu — pola yang sama dengan
+    # count_spread_pct/est_length_spread_pct di bawah.
+    gapped  = sum(1 for p in per_sales if p["contiguity"]["n_islands"] > 1)
 
     return {
         "per_sales": per_sales,
@@ -77,6 +92,7 @@ def build_summary(
         "imbalance": {
             "count_spread_pct":      round(_spread_pct(counts), 2),
             "est_length_spread_pct": round(_spread_pct(lengths), 2),
+            "territories_with_gaps": gapped,
         },
     }
 
