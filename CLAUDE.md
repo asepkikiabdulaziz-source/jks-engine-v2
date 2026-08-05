@@ -13,7 +13,9 @@
 
 | Dokumen | Isi |
 |---|---|
-| `docs/ROADMAP.md` | **Rencana kerja — sumber kebenaran.** Item A–F, effort, keputusan terbuka |
+| `docs/VISI.md` | **Arah produk (2026-08-04, BELUM DIKUNCI).** Platform publik niche FMCG; tiga lapis Potensi/Simulasi/Perencanaan; `n_sales` jadi keluaran, bukan masukan. **Baca sebelum ROADMAP** |
+| `docs/pilot/` | Paket tes distributor kedua — protokol, template, runner offline. Siap, sengaja ditunda |
+| `docs/ROADMAP.md` | Rencana kerja tool internal (item A–F). ⚠️ **Usang sebagian** sejak `VISI.md` — ditulis ulang setelah arah dikunci |
 | `docs/incident-2026-07-17/` | Insiden login mati: root cause, SQL perbaikan, briefing utk nabati-heroes |
 | `AUDIT.md` | Audit keamanan 2026-06-06 (C1/H1 masih terbuka) |
 | `TECHNICAL.md` | Arsitektur detail: FE, engine, endpoint, schema (⚠️ tanpa DDL) |
