@@ -30,7 +30,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, NamedTuple, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,6 +53,8 @@ from route_engine.core.biweekly import split_ganjil_genap
 from route_engine.core.estimator import nn_tour
 from route_engine.core.geo import centroid
 from route_engine.core.partition import balanced_partition
+from route_engine.core.qc import run_qc
+from route_engine.core.summary import build_summary
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +193,34 @@ def _agg_to_schedule_out(
         )
         for sn, days_map in sorted(agg.items())
     ]
+
+
+class _SummaryRow(NamedTuple):
+    """Adapter minimal: `build_summary` cuma butuh tiga field ini.
+
+    Path A menghasilkan dict (bentuk yang diminta `save_plan`), sedangkan
+    `build_summary` bekerja atas objek `Assignment`. NamedTuple dipakai alih-alih
+    kelas boneka `type("F", (), {...})()` supaya bentuk yang dibutuhkan tertulis
+    jelas dan salah-ketik ketahuan, bukan jadi AttributeError saat runtime.
+    """
+    customer_code:     str
+    sales_person_name: str
+    day_index:         int
+
+
+def _summary_from_dicts(assignment_dicts, store_map, depo, qc_flags) -> dict:
+    """Hitung summary untuk Path A dengan mesin yang sama seperti Path B.
+
+    Sebelum ini `generate_plan` menyimpan `summary_map[div] = {}` untuk Path A —
+    plan tersimpan tanpa metrik beban maupun sebar, padahal Path B punya keduanya.
+    Dua plan yang dibuat lewat jalur berbeda jadi tidak sebanding, dan tak ada apa
+    pun di data yang menjelaskan kenapa.
+    """
+    rows = [
+        _SummaryRow(a["customer_code"], a["sales_person_name"], a["day_index"])
+        for a in assignment_dicts
+    ]
+    return build_summary(rows, store_map, start=depo, qc_flags=qc_flags)
 
 
 # ── Shared output models ───────────────────────────────────────────────────────
@@ -401,16 +431,18 @@ def generate_plan(
             store_map = {s.customer_code: s for s in stores}
             if div.schedule_override:
                 # Edit manual hari/pekan (s2_preview) → pakai jadwal apa adanya
-                t_out, s_out, a_dicts = _build_from_override(
+                t_out, s_out, a_dicts, a_summary = _build_from_override(
                     store_map         = store_map,
                     territories       = div.territories,
                     schedule_override = div.schedule_override,
                     philosophy        = div.philosophy,
                     div_sls           = div.div_sls,
                     version_id        = vid,
+                    depo_lat          = req.depo_lat,
+                    depo_lon          = req.depo_lon,
                 )
             else:
-                t_out, s_out, a_dicts = _build_from_territories(
+                t_out, s_out, a_dicts, a_summary = _build_from_territories(
                     store_map         = store_map,
                     territories       = div.territories,
                     n_sales           = div.n_sales,
@@ -435,7 +467,7 @@ def generate_plan(
                 ))
             else:
                 version_ids[div.div_sls] = vid
-                summary_map[div.div_sls] = {}   # summary tidak dihitung untuk path ini
+                summary_map[div.div_sls] = a_summary
                 all_assignments.extend(a_dicts)
             continue
 
@@ -571,7 +603,7 @@ def _build_from_territories(
     version_id        : str,
     n_sales           : int   = 1,     # dipakai TRAFFIC: partisi sales per hari
     balance_tolerance : float = 0.10,  # toleransi kerataan sub-partisi TRAFFIC
-) -> "tuple[List[TerritoryOut], List[SalesScheduleOut], List[dict]]":
+) -> "tuple[List[TerritoryOut], List[SalesScheduleOut], List[dict], dict]":
     """
     Dari territories pre-assigned, jalankan day/sales scheduling.
     Skip K-Means — langsung ke assignment dari territories yang ada.
@@ -638,6 +670,16 @@ def _build_from_territories(
             customer_codes = [s.customer_code for s in t_stores],
         ))
 
+    # ── Stage 0: QC ────────────────────────────────────────────────────────────
+    # Path B (engine.run) menjalankan ini sejak awal; Path A dulu tidak, dan
+    # mengeset qc_flag=None secara harfiah. Akibatnya plan dari jalur yang PALING
+    # SERING dipakai tersimpan tanpa penanda mutu sama sekali — beda diam-diam
+    # dari Path B, dan tak ada apa pun di keluaran yang menunjukkannya.
+    qc_flags = run_qc(list(store_map.values()))
+    qc_map: Dict[str, str] = {}
+    for f in qc_flags:
+        qc_map.setdefault(f.customer_code, f.reason)
+
     # ── Stage 3: sequencing per blok (sales, hari) ─────────────────────────────
     agg: Dict[str, Dict[int, dict]] = {}       # sn → {day_idx0 → {...}}
     assignment_dicts: List[dict] = []
@@ -680,11 +722,12 @@ def _build_from_territories(
                 "visit_ganjil":      ganjil,
                 "visit_genap":       genap,
                 "visit_order":       visit_order,
-                "qc_flag":           None,
+                "qc_flag":           qc_map.get(s.customer_code),
                 "version_id":        version_id,
             })
 
-    return territories_out, _agg_to_schedule_out(agg), assignment_dicts
+    summary = _summary_from_dicts(assignment_dicts, store_map, depo, qc_flags)
+    return territories_out, _agg_to_schedule_out(agg), assignment_dicts, summary
 
 
 # ── Helper: build assignments dari schedule_override (edit manual s2_preview) ──
@@ -701,7 +744,9 @@ def _build_from_override(
     philosophy        : str,
     div_sls           : str,
     version_id        : str,
-) -> "tuple[List[TerritoryOut], List[SalesScheduleOut], List[dict]]":
+    depo_lat          : float,
+    depo_lon          : float,
+) -> "tuple[List[TerritoryOut], List[SalesScheduleOut], List[dict], dict]":
     """
     Bangun assignment LANGSUNG dari jadwal hasil edit manual user (s2_preview).
     Hari & pekan diambil apa adanya dari override — TIDAK ada penjadwalan ulang.
@@ -713,6 +758,7 @@ def _build_from_override(
       - code hanya di customer_codes → M1 (tiap pekan: ganjil = genap = True)
     """
     # territories_out: kepemilikan sales tidak berubah di s2 — untuk konsistensi preview
+    depo = (depo_lat, depo_lon)
     territories_out: List[TerritoryOut] = []
     for t in territories:
         t_stores = [store_map[c] for c in t.customer_codes if c in store_map]
@@ -727,6 +773,14 @@ def _build_from_override(
             centroid_lon   = ct_lon,
             customer_codes = [s.customer_code for s in t_stores],
         ))
+
+    # QC dijalankan di sini juga. Override memang menghormati keputusan manusia soal
+    # HARI dan PEKAN -- tapi mutu KOORDINAT bukan keputusan manusia, dan menandainya
+    # tidak mengubah satu pun penempatan.
+    qc_flags = run_qc(list(store_map.values()))
+    qc_map: Dict[str, str] = {}
+    for f in qc_flags:
+        qc_map.setdefault(f.customer_code, f.reason)
 
     agg: Dict[str, Dict[int, dict]] = {}
     assignment_dicts: List[dict] = []
@@ -772,11 +826,12 @@ def _build_from_override(
                     "visit_ganjil":      ganjil,
                     "visit_genap":       genap,
                     "visit_order":       visit_order,
-                    "qc_flag":           None,
+                    "qc_flag":           qc_map.get(code),
                     "version_id":        version_id,
                 })
 
-    return territories_out, _agg_to_schedule_out(agg), assignment_dicts
+    summary = _summary_from_dicts(assignment_dicts, store_map, depo, qc_flags)
+    return territories_out, _agg_to_schedule_out(agg), assignment_dicts, summary
 
 
 # ── Stage 2: day scheduling dari territories pre-assigned ─────────────────────
@@ -816,7 +871,7 @@ def stage2(
         for s in div_raw
     }
 
-    territories_out, schedule_out, _ = _build_from_territories(
+    territories_out, schedule_out, _, _ = _build_from_territories(
         store_map         = store_map,
         territories       = req.territories,
         n_sales           = div.n_sales,
