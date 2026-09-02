@@ -52,7 +52,7 @@ patch DB lama. Lihat §Pending.
 | `docs/VISI.md` | **Arah produk (2026-08-04, BELUM DIKUNCI).** Platform publik niche FMCG; tiga lapis Potensi/Simulasi/Perencanaan; `n_sales` jadi keluaran, bukan masukan. **Baca sebelum ROADMAP** |
 | `docs/ML.md` | Di mana ML masuk & di mana tidak. Aturan keras: ML **selalu** di lapis enrichment, **tak pernah** di dalam `route_engine/` (determinisme). Termasuk survei klaim "AI" pesaing |
 | `docs/pilot/` | Paket tes distributor kedua — protokol, template, runner offline. Siap, sengaja ditunda |
-| `docs/ROADMAP.md` | Rencana kerja tool internal (item A–F). ⚠️ **Usang sebagian** sejak `VISI.md`, dan §Lintas-isu-nya kini juga usang karena pencabutan 08-05 — ditulis ulang setelah arah dikunci |
+| `docs/ROADMAP.md` | **Rencana kerja — ditulis ulang 2026-09-02.** Fase 0 (DB baru & auth, blocker tunggal) → Fase 1 (utang yang tak boleh ikut pindah) → Fase 2 (**dua cabang**, belum dipilih: tool internal vs platform). §5 = filosofi objektif engine, masih berlaku. §7 = 8 keputusan terbuka |
 | `docs/incident-2026-07-17/` | Arsip insiden login mati: root cause, SQL perbaikan, briefing utk nabati-heroes. **Historis** — gap `0398` di dalamnya sudah tak relevan |
 | `AUDIT.md` | Audit keamanan 2026-06-06. C1 ✅ & M5 ✅ selesai; H1/H2/M1–M4/M6–M8 masih terbuka |
 | `TECHNICAL.md` | Arsitektur detail: FE, engine, endpoint, schema (⚠️ tanpa DDL, dan ⚠️ menggambarkan jalur DB yang kini mati) |
@@ -263,8 +263,9 @@ python scripts/run_migrations.py --dry-run
 
 ## Pending / Next Session
 
-> Rencana produk ada di **`docs/VISI.md`**. `docs/ROADMAP.md` masih menggambarkan tool
-> internal dan usang sebagian. Jangan duplikasi keduanya di sini.
+> Rencana kerja lengkap ada di **`docs/ROADMAP.md`** (ditulis ulang 2026-09-02: fase, effort,
+> ketergantungan, keputusan terbuka); arah produk di **`docs/VISI.md`**. Jangan duplikasi
+> keduanya di sini — di bawah hanya ringkasan sekilas.
 
 ### Blocker tunggal: provisioning project Supabase baru
 
@@ -326,7 +327,7 @@ Semua pekerjaan lain menunggu ini, karena tanpa DB tak ada aplikasi. Yang sudah 
       salin resep lama.
 - [ ] **H2/M1–M4/M6–M8** dari `AUDIT.md` — CORS prod-safe, batas input (`max_items`, bound
       lat/lon), pin `requirements-api.txt`, `python-dotenv` eksplisit, model lock TRAFFIC,
-      race double-click. Hilang dari ROADMAP, belum dikerjakan.
+      race double-click. Sekarang tercatat di ROADMAP §3.6, belum dikerjakan.
 - [ ] **`0001_baseline.sql` bisa drift lagi** kapan pun ada perubahan out-of-band di prod —
       pola `slot_assignment_flat.auth_user_id` & `dim_slots.R00-00-02.scope` membuktikannya.
       Kurang relevan setelah pindah ke project sendiri, tapi jangan diperlakukan sebagai

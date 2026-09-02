@@ -9,6 +9,16 @@
 > (OSRM) di sana tertulis *"capstone, bisa dikerjakan kapan saja"* — dalam visi ini
 > ia naik jadi syarat kredibilitas. ROADMAP baru ditulis ulang **setelah** arah ini
 > dikunci, bukan sebelumnya.
+>
+> **↑ Sudah terjadi lebih cepat dari rencana itu — 2026-09-02, dan arah ini MASIH belum
+> dikunci.** Pemicunya bukan arah produk melainkan kejadian di luar keduanya: 2026-08-05
+> nabati-heroes menghapus 17 RPC JKS dari `public` (migrasi `0525` mereka) dan aplikasi
+> produksi mati. ROADMAP lama menjadwalkan pekerjaan di atas fondasi yang sudah tidak ada,
+> jadi menunggu penguncian berarti membiarkannya menyesatkan. ROADMAP baru menyelesaikan
+> tegangan itu dengan **memisahkan** yang wajib di setiap cabang (Fase 0–1: DB baru, auth,
+> data, utang mematikan) dari yang bergantung arah (Fase 2, ditulis sebagai **dua cabang
+> berdampingan** — tidak dipilih di sana). Jadi dokumen ini tetap yang memutuskan arah;
+> ROADMAP tidak mendahuluinya.
 
 ---
 
