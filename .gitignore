@@ -27,9 +27,32 @@ venv/
 viz_partition_result.*
 
 # ── Data sensitif / file klien ───────────────────────────────────────────────
-# Template boleh di-commit, data nyata jangan
-SRAGEN*.xlsx
-*TO BE*.xlsx
+# Repo ini PUBLIK. Data toko nyata (kode pelanggan + koordinat + omset) milik
+# distributor dan tidak boleh keluar.
+#
+# Pola lama berbasis NAMA ("SRAGEN*.xlsx", "*TO BE*.xlsx") gagal secara senyap:
+# tiap file baru dengan nama lain lolos, dan itulah yang terjadi pada
+# "LIST TOKO SINGLE COUNTING.xlsx" (20 MB) + "TANGKOT (2).xlsx" — dua-duanya
+# nongkrong di working tree tanpa terjaring. Jadi arahnya dibalik: SEMUA
+# spreadsheet ditolak lebih dulu, template di-whitelist satu per satu.
+# Menambah data baru = tak perlu tindakan. Menambah template = sengaja & terlihat.
+*.xlsx
+*.xlsm
+*.xls
+*.xlsb
+
+# CSV kena pola yang sama, dan di sini justru lebih mendesak: alur pilot memang
+# memakan CSV data toko nyata dari calon pelanggan (scripts/pilot_run.py --csv)
+# dan menulis keluaran ke pilot_out/. Satu `git add -A` yang lalai sudah cukup.
+*.csv
+*.tsv
+
+# Template yang memang boleh di-commit — tambahkan di sini, eksplisit.
+!docs/pilot/template_toko.csv
+
+# Keluaran runner pilot — berisi data calon pelanggan, jangan pernah masuk git.
+pilot_out/
+
 referensi/
 
 # ── IDE ──────────────────────────────────────────────────────────────────────
